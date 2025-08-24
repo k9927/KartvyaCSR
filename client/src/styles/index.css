@@ -1,0 +1,57 @@
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    font-family: 'Poppins', sans-serif;
+  }
+
+  body {
+    margin: 0;
+    padding: 0;
+    line-height: 1.6;
+  }
+
+  /* Ensure all images scale properly */
+  img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+  }
+
+  /* Hero section image scaling */
+  .hero-section img {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: cover !important;
+    object-position: center !important;
+  }
+
+  /* Why CSR section image scaling */
+  .why-csr-section img {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: cover !important;
+    object-position: center !important;
+  }
+
+  /* Responsive image scaling */
+  @media (max-width: 768px) {
+    .hero-section img {
+      min-height: 100vh !important;
+    }
+    
+    .why-csr-section img {
+      height: 100% !important;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .hero-section img {
+      min-height: 100vh !important;
+    }
+  }
+}
