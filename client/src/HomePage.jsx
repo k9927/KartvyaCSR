@@ -79,7 +79,6 @@ export default function HomePage() {
 
             {/* Desktop menu */}
             <div className="items-center hidden space-x-8 md:flex">
-              <a href="/how-it-works" className="text-gray-600 transition-colors hover:text-gray-900">How It Works</a>
               <a href="/success-stories" className="text-gray-600 transition-colors hover:text-gray-900">Success Stories</a>
               <a href="/about-us" className="text-gray-600 transition-colors hover:text-gray-900">About Us</a>
               <a href="/login" className="text-gray-600 transition-colors hover:text-gray-900">Login</a>
