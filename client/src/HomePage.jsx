@@ -1,4 +1,8 @@
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
+import "bootstrap/dist/css/bootstrap.min.css";
+import "@fortawesome/fontawesome-free/css/all.min.css";
+import Navbar from './components/Navbar';
 
 // Import images using Vite's static asset handling
 import ref1 from '/images/ref (1).jpg';
@@ -15,10 +19,425 @@ import logo6 from '/images/logo6.jpg';
 import logo7 from '/images/logo7.jpg';
 import logo from '/images/logo.jpg';
 
+// Enhanced styling for the home page
+const styles = `
+
+  /* Hero Section Enhancement */
+  .hero-section {
+    position: relative;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+
+  .hero-overlay {
+    background: linear-gradient(135deg, rgba(0, 0, 0, 0.6) 0%, rgba(0, 0, 0, 0.4) 100%);
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1;
+  }
+
+  .hero-content {
+    position: relative;
+    z-index: 2;
+    text-align: center;
+    max-width: 800px;
+    padding: 2rem;
+  }
+
+  .hero-title {
+    font-size: 3.5rem;
+    font-weight: 700;
+    margin-bottom: 1.5rem;
+    color: #ffffff;
+    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+    line-height: 1.2;
+  }
+
+  .hero-subtitle {
+    font-size: 1.25rem;
+    margin-bottom: 2rem;
+    color: #ffffff;
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
+    line-height: 1.6;
+    font-weight: 400;
+  }
+
+  .hero-buttons {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .btn-hero-primary {
+    background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+    color: white;
+    border: none;
+    border-radius: 2rem;
+    padding: 1rem 2rem;
+    font-weight: 600;
+    font-size: 1.1rem;
+    transition: all 0.3s ease;
+    text-decoration: none;
+    display: inline-block;
+  }
+
+  .btn-hero-primary:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 10px 30px rgba(40, 167, 69, 0.4);
+    color: white;
+    text-decoration: none;
+  }
+
+  .btn-hero-secondary {
+    background: transparent;
+    color: white;
+    border: 2px solid white;
+    border-radius: 2rem;
+    padding: 1rem 2rem;
+    font-weight: 600;
+    font-size: 1.1rem;
+    transition: all 0.3s ease;
+    text-decoration: none;
+    display: inline-block;
+  }
+
+  .btn-hero-secondary:hover {
+    background: white;
+    color: #667eea;
+    transform: translateY(-3px);
+    box-shadow: 0 10px 30px rgba(255, 255, 255, 0.3);
+    text-decoration: none;
+  }
+
+  /* Section Styling */
+  .section-enhanced {
+    padding: 5rem 0;
+    position: relative;
+  }
+
+  .section-header {
+    text-align: center;
+    margin-bottom: 4rem;
+  }
+
+  .section-title {
+    font-size: 2.5rem;
+    font-weight: 700;
+    color: #2c3e50;
+    margin-bottom: 1rem;
+  }
+
+  .section-subtitle {
+    font-size: 1.1rem;
+    color: #495057;
+    max-width: 600px;
+    margin: 0 auto;
+    font-weight: 500;
+  }
+
+  /* Why CSR Section */
+  .why-csr-section {
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  }
+
+  .why-csr-content {
+    background: white;
+    border-radius: 1.5rem;
+    padding: 3rem;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+    border: 1px solid rgba(102, 126, 234, 0.1);
+  }
+
+  .why-csr-title {
+    font-size: 2.5rem;
+    font-weight: 700;
+    color: #2c3e50;
+    margin-bottom: 1.5rem;
+  }
+
+  .why-csr-text {
+    font-size: 1.1rem;
+    line-height: 1.8;
+    color: #495057;
+    margin-bottom: 2rem;
+  }
+
+  .highlight-text {
+    color: #667eea;
+    font-weight: 600;
+  }
+
+  /* Stats Section */
+  .stats-section {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .stats-section::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="grain" width="100" height="100" patternUnits="userSpaceOnUse"><circle cx="50" cy="50" r="1" fill="white" opacity="0.1"/></pattern></defs><rect width="100" height="100" fill="url(%23grain)"/></svg>');
+    opacity: 0.3;
+  }
+
+  .stats-grid {
+    position: relative;
+    z-index: 2;
+  }
+
+  .stat-card {
+    background: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 1.5rem;
+    padding: 2rem;
+    text-align: center;
+    transition: all 0.3s ease;
+  }
+
+  .stat-card:hover {
+    transform: translateY(-5px);
+    background: rgba(255, 255, 255, 0.15);
+    box-shadow: 0 15px 40px rgba(0, 0, 0, 0.2);
+  }
+
+  .stat-number {
+    font-size: 3rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+    color: #ffffff;
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.3);
+  }
+
+  .stat-label {
+    font-size: 1.1rem;
+    font-weight: 500;
+    opacity: 0.9;
+  }
+
+  /* Testimonials Section */
+  .testimonials-section {
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  }
+
+  .testimonial-card {
+    background: white;
+    border-radius: 1.5rem;
+    padding: 2.5rem;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+    border: 1px solid rgba(102, 126, 234, 0.1);
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .testimonial-card::before {
+    content: '"';
+    position: absolute;
+    top: -10px;
+    left: 20px;
+    font-size: 4rem;
+    color: rgba(102, 126, 234, 0.1);
+    font-family: serif;
+  }
+
+  .testimonial-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 20px 50px rgba(102, 126, 234, 0.15);
+  }
+
+  .testimonial-text {
+    font-size: 1.1rem;
+    line-height: 1.7;
+    color: #495057;
+    margin-bottom: 1.5rem;
+    font-style: italic;
+  }
+
+  .testimonial-author {
+    font-weight: 600;
+    color: #2c3e50;
+    margin-bottom: 0.25rem;
+  }
+
+  .testimonial-position {
+    color: #495057;
+    font-size: 0.9rem;
+    font-weight: 500;
+  }
+
+  /* Partners Section */
+  .partners-section {
+    background: white;
+  }
+
+  .partner-logo {
+    background: white;
+    border-radius: 1rem;
+    padding: 1.5rem;
+    box-shadow: 0 5px 20px rgba(0, 0, 0, 0.1);
+    transition: all 0.3s ease;
+    border: 1px solid #e9ecef;
+    height: 120px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .partner-logo:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 10px 30px rgba(102, 126, 234, 0.15);
+  }
+
+  .partner-logo img {
+    max-height: 80px;
+    max-width: 100%;
+    object-fit: contain;
+  }
+
+  /* Footer Enhancement */
+  .footer-enhanced {
+    background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+    color: white;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .footer-enhanced::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="footer-grain" width="100" height="100" patternUnits="userSpaceOnUse"><circle cx="50" cy="50" r="1" fill="white" opacity="0.05"/></pattern></defs><rect width="100" height="100" fill="url(%23footer-grain)"/></svg>');
+  }
+
+  .footer-content {
+    position: relative;
+    z-index: 2;
+  }
+
+  .footer-title {
+    font-size: 1.25rem;
+    font-weight: 600;
+    margin-bottom: 1.5rem;
+    color: #ffffff;
+  }
+
+  .footer-link {
+    color: #ecf0f1;
+    text-decoration: none;
+    transition: all 0.3s ease;
+    display: block;
+    margin-bottom: 0.5rem;
+    font-weight: 400;
+  }
+
+  .footer-link:hover {
+    color: #ffffff;
+    transform: translateX(5px);
+    text-decoration: none;
+  }
+
+  .newsletter-input {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 2rem;
+    padding: 0.75rem 1.5rem;
+    color: white;
+    backdrop-filter: blur(10px);
+  }
+
+  .newsletter-input::placeholder {
+    color: rgba(255, 255, 255, 0.8);
+  }
+
+  .newsletter-input:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+  }
+
+  .newsletter-btn {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border: none;
+    border-radius: 2rem;
+    padding: 0.75rem 1.5rem;
+    color: white;
+    font-weight: 500;
+    transition: all 0.3s ease;
+  }
+
+  .newsletter-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
+  }
+
+  /* Responsive Design */
+  @media (max-width: 768px) {
+    .hero-title {
+      font-size: 2.5rem;
+    }
+    
+    .hero-buttons {
+      flex-direction: column;
+      align-items: center;
+    }
+    
+    .section-title {
+      font-size: 2rem;
+    }
+    
+    .stat-number {
+      font-size: 2.5rem;
+    }
+  }
+
+  /* Animations */
+  @keyframes fadeInUp {
+    from {
+      opacity: 0;
+      transform: translateY(30px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .animate-fade-in-up {
+    animation: fadeInUp 0.6s ease-out;
+  }
+
+  @keyframes float {
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(-10px); }
+  }
+
+  .animate-float {
+    animation: float 3s ease-in-out infinite;
+  }
+`;
+
 export default function HomePage() {
   const [currentSlide, setCurrentSlide] = useState(0);
   const [currentWhySlide, setCurrentWhySlide] = useState(0);
   const [currentPartnerSlide, setCurrentPartnerSlide] = useState(0);
+  const [isScrolled, setIsScrolled] = useState(false);
 
   // Hero slideshow images - using imported images
   const heroSlides = [ref1, ref2, ref3];
@@ -32,6 +451,16 @@ export default function HomePage() {
     [logo2, logo4, logo5],
     [logo6, logo7, logo3]
   ];
+
+  // Handle scroll for navbar effect
+  useEffect(() => {
+    const handleScroll = () => {
+      setIsScrolled(window.scrollY > 50);
+    };
+
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
 
   // Auto-advance hero slideshow
   useEffect(() => {
@@ -58,273 +487,323 @@ export default function HomePage() {
   }, [partnerLogos.length]);
 
   return (
-    <div>
-      {/* Navigation */}
-      <nav className="fixed top-0 z-50 w-full bg-white shadow-sm">
-        <div className="px-4 mx-auto max-w-7xl sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            <a href="/" className="flex items-center">
-              <span className="text-xl font-bold text-blue-600">CSR</span>
-              <span className="text-xl text-gray-800">Connect</span>
-            </a>
-            
-            {/* Mobile menu button */}
-            <div className="md:hidden">
-              <button className="text-gray-600 hover:text-gray-900 focus:outline-none">
-                <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-                </svg>
-              </button>
+    <>
+      <style>{styles}</style>
+      <div>
+        <Navbar />
+
+        {/* Enhanced Hero Section */}
+        <section className="hero-section" style={{ paddingTop: '80px' }}>
+          <div className="hero-overlay"></div>
+          <div className="absolute inset-0 w-full h-full">
+            <div className="relative w-full h-full">
+              {heroSlides.map((slide, index) => (
+                <img
+                  key={index}
+                  src={slide}
+                  alt={`Hero slide ${index + 1}`}
+                  className={`absolute inset-0 w-full h-full object-cover object-center transition-opacity duration-1000 ease-in-out ${
+                    index === currentSlide ? 'opacity-100' : 'opacity-0'
+                  }`}
+                  style={{ 
+                    minHeight: '100vh', 
+                    width: '100%',
+                    height: '100vh',
+                    objectFit: 'cover',
+                    objectPosition: 'center'
+                  }}
+                />
+              ))}
             </div>
-
-            {/* Desktop menu */}
-            <div className="items-center hidden space-x-8 md:flex">
-              <a href="/success-stories" className="text-gray-600 transition-colors hover:text-gray-900">Success Stories</a>
-              <a href="/about-us" className="text-gray-600 transition-colors hover:text-gray-900">About Us</a>
-              <a href="/login" className="text-gray-600 transition-colors hover:text-gray-900">Login</a>
-              <a href="/register" className="px-4 py-2 text-white transition-colors bg-green-600 rounded-md hover:bg-green-700">Register Now</a>
-            </div>
           </div>
-        </div>
-      </nav>
-
-      {/* Hero Section with Slideshow */}
-      <section className="relative flex items-center justify-center min-h-screen overflow-hidden text-white hero-section">
-        <div className="absolute inset-0 w-full h-full">
-          <div className="relative w-full h-full">
-            {heroSlides.map((slide, index) => (
-              <img
-                key={index}
-                src={slide}
-                alt={`Hero slide ${index + 1}`}
-                className={`absolute inset-0 w-full h-full object-cover object-center transition-opacity duration-500 ease-in-out ${
-                  index === currentSlide ? 'opacity-100' : 'opacity-0'
-                }`}
-                style={{ 
-                  minHeight: '100vh', 
-                  width: '100%',
-                  maxWidth: '100%',
-                  height: 'auto'
-                }}
-              />
-            ))}
-            <div className="absolute inset-0 bg-black bg-opacity-50"></div>
-          </div>
-        </div>
-        
-        <div className="relative z-10 max-w-4xl px-4 mx-auto text-center">
-          <h1 className="mb-6 text-4xl font-bold md:text-6xl">Elevating Corporate Social Responsibility</h1>
-          <p className="max-w-3xl mx-auto mb-8 text-xl md:text-2xl">
-            CSR Connect is India's premier platform for aligning corporations with vetted NGOs, ensuring compliance, transparency, and measurable outcomes under the Companies Act, 2013.
-          </p>
-          <div className="flex flex-col justify-center gap-4 sm:flex-row">
-            <a href="#why-csr" className="px-8 py-3 text-lg font-semibold text-white transition-colors bg-green-600 rounded-md hover:bg-green-700">
-              Explore CSR Benefits
-            </a>
-            <a href="/register" className="px-8 py-3 text-lg font-semibold text-white transition-colors border-2 border-white rounded-md hover:bg-white hover:text-gray-900">
-              Get Started
-            </a>
-          </div>
-        </div>
-      </section>
-
-      {/* Why CSR Matters Section */}
-      <section id="why-csr" className="py-16 bg-gray-50">
-        <div className="px-4 mx-auto max-w-7xl sm:px-6 lg:px-8">
-          <div className="grid items-center gap-12 lg:grid-cols-2">
-            <div>
-              <h2 className="mb-6 text-3xl font-bold text-blue-600 md:text-4xl">Why CSR Matters</h2>
-              <p className="mb-6 text-lg leading-relaxed text-gray-700">
-                Corporate Social Responsibility (CSR) is not just a moral obligation—it's a strategic advantage. 
-                Did you know that companies with strong CSR programs experience <strong className="text-blue-600">20% higher employee retention</strong> 
-                and <strong className="text-blue-600">13% higher productivity</strong>? CSR also builds brand loyalty, with <strong className="text-blue-600">87% of consumers</strong> 
-                more likely to support companies that advocate for social issues.
-              </p>
-              <a href="#how-it-works" className="inline-block px-6 py-3 font-semibold text-white transition-colors bg-green-600 rounded-md hover:bg-green-700">
-                Learn More
+          
+          <div className="hero-content animate-fade-in-up">
+            <h1 className="hero-title">Elevating Corporate Social Responsibility</h1>
+            <p className="hero-subtitle">
+              CSR Connect is India's premier platform for aligning corporations with vetted NGOs, 
+              ensuring compliance, transparency, and measurable outcomes under the Companies Act, 2013.
+            </p>
+            <div className="hero-buttons">
+              <a href="#why-csr" className="btn-hero-primary">
+                <i className="fas fa-heart me-2"></i>
+                Explore CSR Benefits
               </a>
+              <Link to="/SelectType" className="btn-hero-secondary">
+                <i className="fas fa-rocket me-2"></i>
+                Get Started
+              </Link>
             </div>
-            <div className="relative h-64 overflow-hidden rounded-lg shadow-lg why-csr-section md:h-96">
-              <div className="relative w-full h-full">
-                {whySlides.map((slide, index) => (
-                  <img
-                    key={index}
-                    src={slide}
-                    alt={`Why CSR slide ${index + 1}`}
-                    className={`absolute inset-0 w-full h-full object-cover object-center transition-opacity duration-500 ease-in-out ${
-                      index === currentWhySlide ? 'opacity-100' : 'opacity-0'
-                    }`}
-                    style={{ 
-                      width: '100%', 
-                      height: '100%',
-                      maxWidth: '100%',
-                      objectFit: 'cover',
-                      objectPosition: 'center'
-                    }}
-                  />
-                ))}
-                <div className="absolute inset-0 bg-black bg-opacity-30"></div>
+          </div>
+        </section>
+
+        {/* Enhanced Why CSR Section */}
+        <section id="why-csr" className="section-enhanced why-csr-section">
+          <div className="container">
+            <div className="row align-items-center">
+              <div className="col-lg-6 mb-5 mb-lg-0">
+                <div className="why-csr-content animate-fade-in-up">
+                  <h2 className="why-csr-title">
+                    <i className="fas fa-star me-3"></i>
+                    Why CSR Matters
+                  </h2>
+                  <p className="why-csr-text">
+                    Corporate Social Responsibility (CSR) is not just a moral obligation—it's a strategic advantage. 
+                    Did you know that companies with strong CSR programs experience 
+                    <span className="highlight-text"> 20% higher employee retention</span> 
+                    and <span className="highlight-text">13% higher productivity</span>? 
+                    CSR also builds brand loyalty, with <span className="highlight-text">87% of consumers</span> 
+                    more likely to support companies that advocate for social issues.
+                  </p>
+                  <a href="#how-it-works" className="btn btn-primary-enhanced">
+                    <i className="fas fa-arrow-right me-2"></i>
+                    Learn More
+                  </a>
+                </div>
+              </div>
+              <div className="col-lg-6">
+                <div 
+                  className="position-relative overflow-hidden shadow-lg animate-float" 
+                  style={{ 
+                    height: '400px', 
+                    borderRadius: '1rem',
+                    backgroundColor: '#f8f9fa'
+                  }}
+                >
+                  <div className="position-relative w-100 h-100">
+                    {whySlides.map((slide, index) => (
+                      <img
+                        key={index}
+                        src={slide}
+                        alt={`Why CSR slide ${index + 1}`}
+                        className={`position-absolute w-100 h-100 transition-opacity duration-1000 ease-in-out ${
+                          index === currentWhySlide ? 'opacity-100' : 'opacity-0'
+                        }`}
+                        style={{ 
+                          width: '100%', 
+                          height: '100%',
+                          objectFit: 'cover',
+                          objectPosition: 'center',
+                          top: 0,
+                          left: 0,
+                          zIndex: 1
+                        }}
+                        onError={(e) => {
+                          console.log('Image failed to load:', slide);
+                          e.target.style.display = 'none';
+                        }}
+                        onLoad={() => {
+                          console.log('Image loaded successfully:', slide);
+                        }}
+                      />
+                    ))}
+                    <div 
+                      className="position-absolute w-100 h-100" 
+                      style={{ 
+                        top: 0, 
+                        left: 0, 
+                        backgroundColor: 'rgba(0, 0, 0, 0.3)',
+                        zIndex: 2
+                      }}
+                    ></div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      </section>
+        </section>
 
-      {/* Trusted Clients Section */}
-      <section className="py-16 bg-gray-50">
-        <div className="px-4 mx-auto text-center max-w-7xl sm:px-6 lg:px-8">
-          <div className="mb-12">
-            <h3 className="mb-4 text-3xl font-bold text-blue-600">Trusted By Leading Organizations</h3>
-            <p className="text-lg text-gray-600">Collaborating with changemakers across industries</p>
+        {/* Enhanced Stats Section */}
+        <section className="section-enhanced stats-section">
+          <div className="container">
+            <div className="section-header text-center text-white">
+              <h2 className="section-title text-white">Our Impact in Numbers</h2>
+              <p className="section-subtitle text-white-50">Transforming CSR collaboration across India</p>
+            </div>
+            <div className="stats-grid row g-4">
+              <div className="col-6 col-lg-3">
+                <div className="stat-card animate-fade-in-up">
+                  <div className="stat-number">500+</div>
+                  <div className="stat-label">NGOs Registered</div>
+                </div>
+              </div>
+              <div className="col-6 col-lg-3">
+                <div className="stat-card animate-fade-in-up">
+                  <div className="stat-number">₹100Cr+</div>
+                  <div className="stat-label">CSR Funds Facilitated</div>
+                </div>
+              </div>
+              <div className="col-6 col-lg-3">
+                <div className="stat-card animate-fade-in-up">
+                  <div className="stat-number">200+</div>
+                  <div className="stat-label">Corporate Partners</div>
+                </div>
+              </div>
+              <div className="col-6 col-lg-3">
+                <div className="stat-card animate-fade-in-up">
+                  <div className="stat-number">1000+</div>
+                  <div className="stat-label">Projects Completed</div>
+                </div>
+              </div>
+            </div>
           </div>
+        </section>
 
-          <div className="relative overflow-hidden">
-            <div className="flex transition-transform duration-1000 ease-in-out" style={{ transform: `translateX(-${currentPartnerSlide * 100}%)` }}>
-              {partnerLogos.map((slide, slideIndex) => (
-                <div key={slideIndex} className="flex-shrink-0 w-full">
-                  <div className="flex flex-wrap items-center justify-center">
-                    {slide.map((logo, index) => (
-                      <img 
-                        key={slideIndex * 3 + index} 
-                        src={logo} 
-                        className="object-contain w-24 h-16 mx-2 transition-transform duration-300 md:w-32 md:h-20 md:mx-4 hover:scale-110" 
-                        alt={`Partner ${slideIndex * 3 + index + 1}`} 
-                        loading="lazy" 
-                      />
-                    ))}
+        {/* Enhanced Partners Section */}
+        <section className="section-enhanced partners-section">
+          <div className="container">
+            <div className="section-header">
+              <h2 className="section-title">
+                <i className="fas fa-handshake me-3"></i>
+                Trusted By Leading Organizations
+              </h2>
+              <p className="section-subtitle">Collaborating with changemakers across industries</p>
+            </div>
+
+            <div className="position-relative overflow-hidden">
+              <div className="d-flex transition-transform duration-1000 ease-in-out" style={{ transform: `translateX(-${currentPartnerSlide * 100}%)` }}>
+                {partnerLogos.map((slide, slideIndex) => (
+                  <div key={slideIndex} className="flex-shrink-0 w-100">
+                    <div className="row justify-content-center">
+                      {slide.map((logo, index) => (
+                        <div key={slideIndex * 3 + index} className="col-md-4 col-lg-3 mb-4">
+                          <div className="partner-logo text-center">
+                            <img 
+                              src={logo} 
+                              className="img-fluid" 
+                              alt={`Partner ${slideIndex * 3 + index + 1}`} 
+                              loading="lazy"
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
+                ))}
+              </div>
+              
+              {/* Carousel Controls */}
+              <button 
+                className="position-absolute top-50 start-0 translate-middle-y btn btn-light rounded-circle p-3 shadow"
+                onClick={() => setCurrentPartnerSlide((prev) => (prev - 1 + partnerLogos.length) % partnerLogos.length)}
+              >
+                <i className="fas fa-chevron-left"></i>
+              </button>
+              <button 
+                className="position-absolute top-50 end-0 translate-middle-y btn btn-light rounded-circle p-3 shadow"
+                onClick={() => setCurrentPartnerSlide((prev) => (prev + 1) % partnerLogos.length)}
+              >
+                <i className="fas fa-chevron-right"></i>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        {/* Enhanced Testimonials */}
+        <section className="section-enhanced testimonials-section">
+          <div className="container">
+            <div className="section-header">
+              <h2 className="section-title">
+                <i className="fas fa-quote-left me-3"></i>
+                What Our Partners Say
+              </h2>
+              <p className="section-subtitle">Real stories from real impact makers</p>
+            </div>
+            <div className="row g-4">
+              <div className="col-lg-4">
+                <div className="testimonial-card animate-fade-in-up h-100 d-flex flex-column">
+                  <p className="testimonial-text flex-grow-1">
+                    "Working with CSR Connect has streamlined our funding process and allowed us to focus on high-impact projects. A truly transformative experience."
+                  </p>
+                  <div className="testimonial-author">Sara Khan</div>
+                  <div className="testimonial-position">Director, Education First NGO</div>
                 </div>
-              ))}
-            </div>
-            
-            {/* Carousel Controls */}
-            <button 
-              className="absolute left-0 p-2 text-white transition-all transform -translate-y-1/2 bg-black bg-opacity-50 rounded-full top-1/2 hover:bg-opacity-70"
-              onClick={() => setCurrentPartnerSlide((prev) => (prev - 1 + partnerLogos.length) % partnerLogos.length)}
-            >
-              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-              </svg>
-            </button>
-            <button 
-              className="absolute right-0 p-2 text-white transition-all transform -translate-y-1/2 bg-black bg-opacity-50 rounded-full top-1/2 hover:bg-opacity-70"
-              onClick={() => setCurrentPartnerSlide((prev) => (prev + 1) % partnerLogos.length)}
-            >
-              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-              </svg>
-            </button>
-          </div>
-        </div>
-      </section>
-
-      {/* Stats Section */}
-      <section className="py-16">
-        <div className="px-4 mx-auto max-w-7xl sm:px-6 lg:px-8">
-          <div className="grid grid-cols-2 gap-4 md:grid-cols-4 md:gap-8">
-            <div className="p-4 text-center transition-transform duration-300 bg-white rounded-lg shadow-md md:p-8 hover:-translate-y-1 hover:shadow-lg">
-              <h2 className="mb-2 text-2xl font-bold text-blue-600 md:text-4xl">500+</h2>
-              <p className="text-sm text-gray-600 md:text-base">NGOs Registered</p>
-            </div>
-            <div className="p-4 text-center transition-transform duration-300 bg-white rounded-lg shadow-md md:p-8 hover:-translate-y-1 hover:shadow-lg">
-              <h2 className="mb-2 text-2xl font-bold text-green-600 md:text-4xl">₹100Cr+</h2>
-              <p className="text-sm text-gray-600 md:text-base">CSR Funds Facilitated</p>
-            </div>
-            <div className="p-4 text-center transition-transform duration-300 bg-white rounded-lg shadow-md md:p-8 hover:-translate-y-1 hover:shadow-lg">
-              <h2 className="mb-2 text-2xl font-bold text-blue-600 md:text-4xl">200+</h2>
-              <p className="text-sm text-gray-600 md:text-base">Corporate Partners</p>
-            </div>
-            <div className="p-4 text-center transition-transform duration-300 bg-white rounded-lg shadow-md md:p-8 hover:-translate-y-1 hover:shadow-lg">
-              <h2 className="mb-2 text-2xl font-bold text-green-600 md:text-4xl">1000+</h2>
-              <p className="text-sm text-gray-600 md:text-base">Projects Completed</p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Testimonials */}
-      <section className="py-16">
-        <div className="px-4 mx-auto max-w-7xl sm:px-6 lg:px-8">
-          <div className="mb-12 text-center">
-            <h3 className="mb-4 text-3xl font-bold text-blue-600">What Our Partners Say</h3>
-          </div>
-          <div className="grid gap-8 md:grid-cols-3">
-            <div className="p-8 text-center bg-white rounded-lg shadow-md">
-              <p className="mb-6 italic text-gray-600">
-                "Working with Project CSR has streamlined our funding process and allowed us to focus on high-impact projects. A truly transformative experience."
-              </p>
-              <h6 className="font-semibold text-gray-800">Jane Smith</h6>
-              <p className="text-gray-500">Sara Khan</p>
-            </div>
-            <div className="p-8 text-center bg-white rounded-lg shadow-md">
-              <p className="mb-6 italic text-gray-600">
-                "The AI-powered NGO-Corporate matching at Project CSR has helped us find partners aligned with our CSR goals. Highly recommend their services."
-              </p>
-              <h6 className="font-semibold text-gray-800">David Lee</h6>
-              <p className="text-gray-500">Mohammed Ahmed</p>
-            </div>
-            <div className="p-8 text-center bg-white rounded-lg shadow-md">
-              <p className="mb-6 italic text-gray-600">
-                "Project CSR has simplified our CSR journey, from finding NGOs to tracking our impact. A reliable and efficient platform."
-              </p>
-              <h6 className="font-semibold text-gray-800">Emily Chen</h6>
-              <p className="text-gray-500">Lila Patel</p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Footer */}
-      <footer className="py-16 text-white bg-gray-900">
-        <div className="px-4 mx-auto max-w-7xl sm:px-6 lg:px-8">
-          <div className="grid gap-8 md:grid-cols-4">
-            <div>
-              <h5 className="mb-4 text-xl font-semibold">About CSR Connect</h5>
-              <p className="text-gray-300">
-                Bridging the gap between NGOs and Corporates to create meaningful social impact through efficient CSR collaboration.
-              </p>
-            </div>
-            <div>
-              <h5 className="mb-4 text-xl font-semibold">Quick Links</h5>
-              <ul className="space-y-2">
-                <li><a href="#" className="text-gray-300 transition-colors hover:text-white">Home</a></li>
-                <li><a href="#" className="text-gray-300 transition-colors hover:text-white">About Us</a></li>
-                <li><a href="#" className="text-gray-300 transition-colors hover:text-white">How It Works</a></li>
-                <li><a href="#" className="text-gray-300 transition-colors hover:text-white">Success Stories</a></li>
-              </ul>
-            </div>
-            <div>
-              <h5 className="mb-4 text-xl font-semibold">Resources</h5>
-              <ul className="space-y-2">
-                <li><a href="#" className="text-gray-300 transition-colors hover:text-white">FAQs</a></li>
-                <li><a href="#" className="text-gray-300 transition-colors hover:text-white">Blog</a></li>
-                <li><a href="#" className="text-gray-300 transition-colors hover:text-white">Contact Us</a></li>
-                <li><a href="#" className="text-gray-300 transition-colors hover:text-white">Privacy Policy</a></li>
-              </ul>
-            </div>
-            <div>
-              <h5 className="mb-4 text-xl font-semibold">Newsletter</h5>
-              <p className="mb-4 text-gray-300">Stay updated with the latest CSR news and success stories.</p>
-              <form className="mb-4">
-                <div className="flex">
-                  <input 
-                    type="email" 
-                    className="flex-1 px-4 py-2 text-gray-900 rounded-l-md focus:outline-none focus:ring-2 focus:ring-green-500" 
-                    placeholder="Enter your email" 
-                  />
-                  <button className="px-4 py-2 text-white transition-colors bg-green-600 rounded-r-md hover:bg-green-700">
-                    Subscribe
-                  </button>
+              </div>
+              <div className="col-lg-4">
+                <div className="testimonial-card animate-fade-in-up h-100 d-flex flex-column">
+                  <p className="testimonial-text flex-grow-1">
+                    "The AI-powered NGO-Corporate matching at CSR Connect has helped us find partners aligned with our CSR goals. Highly recommend their services."
+                  </p>
+                  <div className="testimonial-author">Mohammed Ahmed</div>
+                  <div className="testimonial-position">CSR Head, TechCorp India</div>
                 </div>
-              </form>
+              </div>
+              <div className="col-lg-4">
+                <div className="testimonial-card animate-fade-in-up h-100 d-flex flex-column">
+                  <p className="testimonial-text flex-grow-1">
+                    "CSR Connect has simplified our CSR journey, from finding NGOs to tracking our impact. A reliable and efficient platform."
+                  </p>
+                  <div className="testimonial-author">Lila Patel</div>
+                  <div className="testimonial-position">Sustainability Manager, GreenFuture Ltd</div>
+                </div>
+              </div>
             </div>
           </div>
-          <hr className="my-8 border-gray-700" />
-          <div className="text-center text-gray-300">
-            <small>&copy; 2024 CSR Connect. All rights reserved.</small>
+        </section>
+
+        {/* Enhanced Footer */}
+        <footer className="footer-enhanced py-5">
+          <div className="container footer-content">
+            <div className="row g-4">
+              <div className="col-lg-3 col-md-6">
+                <h5 className="footer-title">
+                  <i className="fas fa-building me-2"></i>
+                  About CSR Connect
+                </h5>
+                <p className="text-light">
+                  Bridging the gap between NGOs and Corporates to create meaningful social impact through efficient CSR collaboration.
+                </p>
+              </div>
+              <div className="col-lg-3 col-md-6">
+                <h5 className="footer-title">
+                  <i className="fas fa-link me-2"></i>
+                  Quick Links
+                </h5>
+                <ul className="list-unstyled">
+                  <li><a href="#" className="footer-link">Home</a></li>
+                  <li><a href="#" className="footer-link">About Us</a></li>
+                  <li><a href="#" className="footer-link">How It Works</a></li>
+                  <li><a href="#" className="footer-link">Success Stories</a></li>
+                </ul>
+              </div>
+              <div className="col-lg-3 col-md-6">
+                <h5 className="footer-title">
+                  <i className="fas fa-book me-2"></i>
+                  Resources
+                </h5>
+                <ul className="list-unstyled">
+                  <li><a href="#" className="footer-link">FAQs</a></li>
+                  <li><a href="#" className="footer-link">Blog</a></li>
+                  <li><a href="#" className="footer-link">Contact Us</a></li>
+                  <li><a href="#" className="footer-link">Privacy Policy</a></li>
+                </ul>
+              </div>
+              <div className="col-lg-3 col-md-6">
+                <h5 className="footer-title">
+                  <i className="fas fa-envelope me-2"></i>
+                  Newsletter
+                </h5>
+                <p className="text-light mb-3">Stay updated with the latest CSR news and success stories.</p>
+                <form className="mb-3">
+                  <div className="input-group">
+                    <input 
+                      type="email" 
+                      className="form-control newsletter-input" 
+                      placeholder="Enter your email" 
+                    />
+                    <button className="btn newsletter-btn" type="submit">
+                      <i className="fas fa-paper-plane"></i>
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+            <hr className="my-4 border-secondary" />
+            <div className="text-center text-light">
+              <small>&copy; 2024 CSR Connect. All rights reserved.</small>
+            </div>
           </div>
-        </div>
-      </footer>
-    </div>
+        </footer>
+      </div>
+    </>
   );
 }

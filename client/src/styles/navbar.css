@@ -1,0 +1,101 @@
+/* Enhanced Navigation Styles */
+.navbar-enhanced {
+  background: rgba(255, 255, 255, 0.95) !important;
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgba(102, 126, 234, 0.1);
+  transition: all 0.3s ease;
+  z-index: 9999 !important;
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  width: 100% !important;
+  min-height: 70px !important;
+}
+
+.navbar-enhanced.scrolled {
+  background: rgba(255, 255, 255, 0.98) !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+}
+
+.brand-gradient {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  font-weight: 700;
+}
+
+.nav-link-enhanced {
+  position: relative;
+  font-weight: 500;
+  transition: all 0.3s ease;
+  color: #495057 !important;
+}
+
+.nav-link-enhanced:hover {
+  color: #667eea !important;
+}
+
+.nav-link-enhanced.active {
+  color: #667eea !important;
+}
+
+.nav-link-enhanced::after {
+  content: '';
+  position: absolute;
+  bottom: -5px;
+  left: 0;
+  width: 0;
+  height: 2px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  transition: width 0.3s ease;
+}
+
+.nav-link-enhanced:hover::after,
+.nav-link-enhanced.active::after {
+  width: 100%;
+}
+
+.btn-primary-enhanced {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border: none;
+  border-radius: 2rem;
+  padding: 0.75rem 2rem;
+  font-weight: 500;
+  transition: all 0.3s ease;
+  color: white !important;
+  text-decoration: none;
+}
+
+.btn-primary-enhanced:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
+  color: white !important;
+  text-decoration: none;
+}
+
+/* Mobile menu improvements */
+@media (max-width: 991.98px) {
+  .navbar-collapse {
+    background: rgba(255, 255, 255, 0.98);
+    border-radius: 0.5rem;
+    margin-top: 1rem;
+    padding: 1rem;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  }
+  
+  .nav-link-enhanced {
+    padding: 0.75rem 0;
+    border-bottom: 1px solid rgba(102, 126, 234, 0.1);
+  }
+  
+  .nav-link-enhanced:last-child {
+    border-bottom: none;
+  }
+  
+  .btn-primary-enhanced {
+    margin-top: 0.5rem;
+    text-align: center;
+  }
+}
