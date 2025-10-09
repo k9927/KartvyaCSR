@@ -823,7 +823,7 @@ export default function NGORegistration() {
         // Success message
         alert('Registration Successful! Your account is under review. We will notify you once verified.');
         // Redirect or handle success
-        window.location.href = '/login';
+        window.location.href = '/ngo-dashboard';
         
       } catch (error) {
         console.error('Error during form submission:', error);
