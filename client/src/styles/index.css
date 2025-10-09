@@ -1,8 +1,12 @@
+/* Import Google Fonts */
 @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap');
+
+/* Tailwind Base Imports */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* Base Layer Customization */
 @layer base {
   html {
     scroll-behavior: smooth;
@@ -22,7 +26,7 @@
     display: block;
   }
 
-  /* Hero section image scaling */
+  /* Hero Section Image Scaling */
   .hero-section img {
     width: 100% !important;
     height: 100% !important;
@@ -30,7 +34,7 @@
     object-position: center !important;
   }
 
-  /* Why CSR section image scaling */
+  /* Why CSR Section Image Scaling */
   .why-csr-section img {
     width: 100% !important;
     height: 100% !important;
@@ -38,17 +42,18 @@
     object-position: center !important;
   }
 
-  /* Responsive image scaling */
+  /* Responsive Image Scaling for Tablets */
   @media (max-width: 768px) {
     .hero-section img {
       min-height: 100vh !important;
     }
-    
+
     .why-csr-section img {
       height: 100% !important;
     }
   }
 
+  /* Responsive Image Scaling for Mobile */
   @media (max-width: 480px) {
     .hero-section img {
       min-height: 100vh !important;
