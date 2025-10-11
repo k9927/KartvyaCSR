@@ -303,7 +303,7 @@ passwordInput.addEventListener('input', () => {
                 });
     
             // Send the form data to your server
-            const response = await fetch('/api/corporate/register', {
+            const response = await fetch('http://localhost:5000/api/corporate/register', {
                 method: 'POST',
                 body: formData,
             });
