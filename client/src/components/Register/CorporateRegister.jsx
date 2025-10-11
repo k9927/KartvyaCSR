@@ -867,26 +867,34 @@ export default function CorporateRegister() {
         console.log('Submitting registration...');
 
         // Send the form data to your server
-        const response = await fetch('/api/corporate/register', {
+        const response = await fetch('http://localhost:5000/api/corporate/register', {
           method: 'POST',
           body: formDataToSend,
         });
 
-        if (!response.ok) {
-          throw new Error('Server returned an error');
+        const result = await response.json();
+        console.log('Registration response:', result);
+
+        if (!response.ok || !result.success) {
+          throw new Error(result.message || 'Server returned an error');
         }
 
-        const result = await response.json();
-        console.log('Registration successful:', result);
+        // Store JWT token for future API calls
+        if (result.data && result.data.token) {
+          localStorage.setItem('token', result.data.token);
+          localStorage.setItem('refreshToken', result.data.refreshToken);
+          localStorage.setItem('user', JSON.stringify(result.data.user));
+        }
         
         // Success message
-        alert('Registration Successful! Your account is under review. We will notify you once verified.');
-        // Redirect or handle success
-        window.location.href = '/login';
+        alert('🎉 Registration Successful! Your account is under review. Redirecting to login...');
+        
+        // Redirect to login page
+        window.location.href = '/Login';
         
       } catch (error) {
         console.error('Error during form submission:', error);
-        alert('Registration Failed. Please try again later.');
+        alert(`Registration Failed: ${error.message || 'Please try again later.'}`);
       }
     }
   };
