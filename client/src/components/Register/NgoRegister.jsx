@@ -808,26 +808,34 @@ export default function NGORegistration() {
         console.log('Submitting registration...');
 
         // Send the form data to your server
-        const response = await fetch('/api/ngo/register', {
+        const response = await fetch('http://localhost:5000/api/ngo/register', {
           method: 'POST',
           body: formDataToSend,
         });
 
-        if (!response.ok) {
-          throw new Error('Server returned an error');
+        const result = await response.json();
+        console.log('Registration response:', result);
+
+        if (!response.ok || !result.success) {
+          throw new Error(result.message || 'Server returned an error');
         }
 
-        const result = await response.json();
-        console.log('Registration successful:', result);
+        // Store JWT token for future API calls
+        if (result.data && result.data.token) {
+          localStorage.setItem('token', result.data.token);
+          localStorage.setItem('refreshToken', result.data.refreshToken);
+          localStorage.setItem('user', JSON.stringify(result.data.user));
+        }
         
         // Success message
-        alert('Registration Successful! Your account is under review. We will notify you once verified.');
-        // Redirect or handle success
-        window.location.href = '/login';
+        alert('🎉 Registration Successful! Your account is under review. Redirecting to dashboard...');
+        
+        // Redirect to NGO dashboard
+        window.location.href = '/ngo-dashboard';
         
       } catch (error) {
         console.error('Error during form submission:', error);
-        alert('Registration Failed. Please try again later.');
+        alert(`Registration Failed: ${error.message || 'Please try again later.'}`);
       }
     }
   };
@@ -841,8 +849,8 @@ export default function NGORegistration() {
         {/* Registration Section */}
         <div className="flex-grow-1 d-flex align-items-center justify-content-center" style={{ paddingTop: '80px' }}>
             <div className="col-lg-8">
-            <div className="card border-0 shadow-lg rounded-4">
-                <div className="card-body p-4">
+            <div className="border-0 shadow-lg card rounded-4">
+                <div className="p-4 card-body">
 
 
                   <form onSubmit={handleSubmit}>
@@ -1061,7 +1069,7 @@ export default function NGORegistration() {
                               e.target.style.boxShadow = 'none';
                             }}
                           />
-                          <small className="form-text text-muted mt-2">
+                          <small className="mt-2 form-text text-muted">
                             <i className="fas fa-info-circle me-1"></i>
                             Provide a comprehensive description of your organization (minimum 50 characters)
                           </small>
@@ -1453,7 +1461,7 @@ export default function NGORegistration() {
                                 <a href="#" className="text-primary fw-semibold">Privacy Policy</a>
                               </label>
                             </div>
-                            {errors.terms && <div className="invalid-feedback mt-2">{errors.terms}</div>}
+                            {errors.terms && <div className="mt-2 invalid-feedback">{errors.terms}</div>}
                           </div>
                         </div>
                       </div>
