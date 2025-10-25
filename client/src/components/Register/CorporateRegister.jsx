@@ -646,9 +646,9 @@ export default function CorporateRegister() {
     },
     regions: {
       validate: (value) => {
-        return Array.isArray(value) && value.length > 0;
+        return value && value !== '';
       },
-      message: 'Please select at least one preferred geographic region'
+      message: 'Please select a preferred geographic region'
     }
   };
 
