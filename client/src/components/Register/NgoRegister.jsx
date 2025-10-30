@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from "react";
-import { Link } from "react-router-dom";
+import React, { useState, useEffect, useRef } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import "bootstrap/dist/css/bootstrap.min.css";
 import "@fortawesome/fontawesome-free/css/all.min.css";
 import Navbar from '../Navbar';
@@ -467,14 +467,253 @@ const styles = `
     background: #667eea;
     color: white;
   }
-`;
 
+  /* Simple modal/overlay for verification progress */
+/* ---- Enhanced modal styles ---- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: linear-gradient(rgba(0,0,0,0.35), rgba(0,0,0,0.45));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+  padding: 20px;
+  backdrop-filter: blur(4px);
+}
+
+.modal-card {
+  width: 460px;
+  max-width: 100%;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfbfd 100%);
+  border-radius: 14px;
+  padding: 28px 26px 26px;
+  box-shadow: 0 20px 45px rgba(12,18,32,0.28);
+  text-align: center;
+  position: relative;
+  border: 1px solid rgba(21,28,46,0.04);
+}
+
+/* corner X (top-right) */
+.modal-close-x {
+  position: absolute;
+  right: 12px;
+  top: 10px;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: #666;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.14s ease, transform 0.14s ease, color 0.14s ease;
+}
+.modal-close-x:hover {
+  background: rgba(255, 75, 75, 0.06);   /* soft red halo */
+  color: #d64545;                        /* red X */
+  transform: translateY(-2px);
+}
+.modal-close-x:focus {
+  outline: none;
+  box-shadow: 0 0 0 0.18rem rgba(214,69,69,0.16);
+}
+
+/* Spinner ring */
+.modal-spinner {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 10px;
+  border-radius: 50%;
+  border: 6px solid rgba(0,0,0,0.06);
+  border-top-color: #3b6be0;
+  animation: modalSpin 1s linear infinite;
+  box-shadow: 0 6px 18px rgba(59,107,224,0.12), inset 0 -6px 12px rgba(59,107,224,0.03);
+}
+@keyframes modalSpin { to { transform: rotate(360deg); } }
+
+.modal-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #1b2430;
+  margin: 6px 0 6px;
+}
+.modal-desc {
+  color: #6b7280;
+  margin-bottom: 8px;
+  font-size: 0.98rem;
+}
+
+/* status cards for success/error */
+.modal-status-card {
+  margin: 0 auto 8px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  max-width: 90%;
+  font-weight: 600;
+}
+.modal-success { background: #e9fff2; color: #0f6b3c; border: 1px solid rgba(40,167,69,0.08); }
+.modal-error { background: #fff0f0; color: #7a1a1a; border: 1px solid rgba(218,77,87,0.06); }
+
+ /* large status icon helper */
+.modal-status-icon {
+  font-size: 56px;
+  line-height: 1;
+  margin-bottom: 8px;
+}
+
+/* actions */
+.modal-actions {
+  display: flex;
+  gap: 0.9rem;
+  justify-content: center;
+  margin-top: 14px;
+  padding-top: 6px;
+}
+
+/* base action button */
+.btn-modal {
+  padding: 0.62rem 1.15rem;
+  min-width: 120px;
+  border-radius: 999px;
+  border: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: 0 8px 20px rgba(12,18,32,0.06);
+  transition: transform 0.14s ease, box-shadow 0.14s ease, opacity 0.12s;
+}
+
+/* neutral (close) */
+.btn-close {
+  background: linear-gradient(180deg,#eef0f2 0%, #e0e4e7 100%);
+  color: #26303a;
+  padding: 0.6rem 1.2rem;
+  min-width: 120px;
+  border-radius: 999px;
+  border: 1px solid rgba(20,25,30,0.06);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  font-weight: 700;
+  font-size: 1rem;
+  line-height: 1;
+  box-shadow: 0 8px 22px rgba(12,18,32,0.06);
+  transition: transform 0.14s ease, box-shadow 0.14s ease, background 0.14s ease, color 0.14s ease;
+}
+.btn-close i,
+.btn-close .fa-times,
+.btn-close .fa-times-circle {
+  color: rgba(38,48,58,0.75);
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  margin: 0;
+  font-size: 1.05rem;
+  line-height: 1;
+  transition: color 0.14s ease, transform 0.12s ease;
+}
+
+/* hover => red style */
+.btn-close i,
+.btn-close .fa-times,
+.btn-close .fa-times-circle {
+  color: rgba(38,48,58,0.75);
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  margin: 0;
+  font-size: 1.05rem;
+  line-height: 1;
+  transition: color 0.14s ease, transform 0.12s ease;
+}
+
+/* hover: red accent, icon turns white or red depending on contrast preference */
+.btn-close:hover {
+  background: linear-gradient(180deg,#fff0f0,#ffdede);
+  color: #a12222;                  /* text turns warm red */
+  transform: translateY(-3px);
+  box-shadow: 0 14px 30px rgba(233,75,75,0.10);
+  border-color: rgba(233,75,75,0.12);
+}
+.btn-close:hover i,
+.btn-close:hover .fa-times,
+.btn-close:hover .fa-times-circle {
+  color: #a12222;                 /* icon turns red to match text */
+  transform: translateY(-1px);
+}
+
+/* keyboard focus ring (accessible) */
+.btn-close:focus {
+  outline: none;
+  box-shadow: 0 0 0 0.18rem rgba(233,75,75,0.14);
+}
+
+/* positive */
+.btn-ok {
+  background: linear-gradient(180deg,#3b8ef0,#2d6fe0);
+  color: #fff;
+  min-width: 140px;
+}
+.btn-ok:hover { transform: translateY(-3px); box-shadow: 0 14px 30px rgba(59,107,224,0.12); }
+
+ /* small screen tweaks */
+@media (max-width: 520px) {
+  .modal-card { padding: 20px; border-radius: 12px; }
+  .modal-spinner { width: 54px; height: 54px; border-width: 5px; }
+  .btn-modal { min-width: 100px; padding: 0.5rem 1rem; font-size: 0.95rem; }
+  .btn-close { min-width: 100px; padding: 0.5rem 1rem; font-size: 0.95rem; 
+}
+
+
+`;
 
 export default function NGORegistration() {
   const [step, setStep] = useState(1);
   const [formData, setFormData] = useState({});
   const [errors, setErrors] = useState({});
   const [passwordStrength, setPasswordStrength] = useState({ level: 'none', score: 0, requirements: [] });
+  const navigate = useNavigate();
+
+  const [showModal, setShowModal] = useState(false);
+  const [modalStatus, setModalStatus] = useState('processing'); // 'processing' | 'success' | 'error'
+  const [modalMessage, setModalMessage] = useState('Verification / Registration in progress. Please wait...');
+
+  const closeButtonRef = useRef(null);
+
+  // lock body scroll when modal is open
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = showModal ? 'hidden' : prev;
+    return () => { document.body.style.overflow = prev; };
+  }, [showModal]);
+
+  // focus primary action when modal is open and not processing
+  useEffect(() => {
+    if (showModal && modalStatus !== 'processing') {
+      // small timeout so browser has rendered button
+      setTimeout(() => closeButtonRef.current?.focus(), 50);
+    }
+  }, [showModal, modalStatus]);
+
+  // close on Escape only when NOT processing
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape' && showModal && modalStatus !== 'processing') {
+        setShowModal(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [showModal, modalStatus]);
 
   // Validation Rules
   const validationRules = {
@@ -531,7 +770,7 @@ export default function NGORegistration() {
         if (!file) return false;
         const maxSize = 5 * 1024 * 1024; // 5MB
         const allowedTypes = ['image/jpeg', 'image/png', 'application/pdf'];
-        
+
         if (file.size > maxSize) {
           return { valid: false, message: 'Please upload a file smaller than 5MB' };
         }
@@ -547,7 +786,7 @@ export default function NGORegistration() {
         if (!file) return false;
         const maxSize = 5 * 1024 * 1024; // 5MB
         const allowedTypes = ['image/jpeg', 'image/png', 'application/pdf'];
-        
+
         if (file.size > maxSize) {
           return { valid: false, message: 'Please upload a file smaller than 5MB' };
         }
@@ -563,7 +802,7 @@ export default function NGORegistration() {
         if (!file) return false;
         const maxSize = 5 * 1024 * 1024; // 5MB
         const allowedTypes = ['image/jpeg', 'image/png', 'application/pdf'];
-        
+
         if (file.size > maxSize) {
           return { valid: false, message: 'Please upload a file smaller than 5MB' };
         }
@@ -579,7 +818,7 @@ export default function NGORegistration() {
         if (!file) return false;
         const maxSize = 5 * 1024 * 1024; // 5MB
         const allowedTypes = ['image/jpeg', 'image/png', 'application/pdf'];
-        
+
         if (file.size > maxSize) {
           return { valid: false, message: 'Please upload a file smaller than 5MB' };
         }
@@ -595,7 +834,7 @@ export default function NGORegistration() {
         if (!file) return false;
         const maxSize = 5 * 1024 * 1024; // 5MB
         const allowedTypes = ['image/jpeg', 'image/png', 'application/pdf'];
-        
+
         if (file.size > maxSize) {
           return { valid: false, message: 'Please upload a file smaller than 5MB' };
         }
@@ -614,7 +853,7 @@ export default function NGORegistration() {
 
   const checkPasswordStrength = (password) => {
     if (!password) return { level: 'none', score: 0, requirements: [] };
-    
+
     const hasLower = /[a-z]/.test(password);
     const hasUpper = /[A-Z]/.test(password);
     const hasNumber = /\d/.test(password);
@@ -632,7 +871,7 @@ export default function NGORegistration() {
     ];
 
     const score = requirements.filter(req => req.met).length;
-    
+
     let level;
     if (score <= 1) level = 'weak';
     else if (score <= 2) level = 'fair';
@@ -666,14 +905,14 @@ export default function NGORegistration() {
         const step1Fields = ['orgName', 'panNumber', 'email', 'phone', 'password'];
         step1Fields.forEach(field => {
           const value = formData[field];
-      if (!value) {
+          if (!value) {
             newErrors[field] = validationRules[field]?.message || `Please enter your ${field.replace(/([A-Z])/g, ' $1').toLowerCase()}`;
-        isValid = false;
+            isValid = false;
           } else if (!validateField(field, value)) {
             newErrors[field] = validationRules[field]?.message;
-        isValid = false;
-      }
-    });
+            isValid = false;
+          }
+        });
         break;
 
       case 2:
@@ -726,7 +965,7 @@ export default function NGORegistration() {
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
     const newValue = type === "checkbox" ? checked : value;
-    
+
     setFormData({
       ...formData,
       [name]: newValue,
@@ -746,7 +985,7 @@ export default function NGORegistration() {
   const handleFileChange = (e) => {
     const { name, files } = e.target;
     const file = files[0];
-    
+
     if (file) {
       const result = validationRules[name]?.validate(file);
       if (typeof result === 'object' && !result.valid) {
@@ -755,9 +994,9 @@ export default function NGORegistration() {
         return;
       }
     }
-    
+
     setFormData({ ...formData, [name]: file });
-    
+
     // Clear error when file is selected
     if (errors[name]) {
       setErrors(prev => ({ ...prev, [name]: '' }));
@@ -778,67 +1017,89 @@ export default function NGORegistration() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    
+
     // Validate all steps before submission
-    let isValid = true;
     for (let i = 1; i <= 3; i++) {
       if (!validateStep(i)) {
-        isValid = false;
         setStep(i);
         return;
       }
     }
 
-    if (isValid) {
-      try {
-        const formDataToSend = new FormData();
-        
-        // Append all form data
-        Object.keys(formData).forEach(key => {
-          if (formData[key] instanceof File) {
-            formDataToSend.append(key, formData[key]);
-          } else if (Array.isArray(formData[key])) {
-            formData[key].forEach(value => formDataToSend.append(key, value));
-          } else {
-            formDataToSend.append(key, formData[key]);
-          }
-        });
-
-        // Show loading state
-        console.log('Submitting registration...');
-
-        // Send the form data to your server
-        const response = await fetch('http://localhost:5000/api/ngo/register', {
-          method: 'POST',
-          body: formDataToSend,
-        });
-
-        const result = await response.json();
-        console.log('Registration response:', result);
-
-        if (!response.ok || !result.success) {
-          throw new Error(result.message || 'Server returned an error');
-        }
-
-        // Store JWT token for future API calls
-        if (result.data && result.data.token) {
-          localStorage.setItem('token', result.data.token);
-          localStorage.setItem('refreshToken', result.data.refreshToken);
-          localStorage.setItem('user', JSON.stringify(result.data.user));
-        }
-        
-        // Success message
-        alert('🎉 Registration Successful! Your account is under review. Redirecting to dashboard...');
-        
-        // Redirect to NGO dashboard
-        window.location.href = '/ngo-dashboard';
-        
-      } catch (error) {
-        console.error('Error during form submission:', error);
-        alert(`Registration Failed: ${error.message || 'Please try again later.'}`);
+    // Prepare form data
+    const formDataToSend = new FormData();
+    Object.keys(formData).forEach(key => {
+      if (formData[key] instanceof File) {
+        formDataToSend.append(key, formData[key]);
+      } else if (Array.isArray(formData[key])) {
+        formData[key].forEach(value => formDataToSend.append(key, value));
+      } else {
+        formDataToSend.append(key, formData[key]);
       }
+    });
+
+    try {
+      // Show modal and processing state
+      setModalStatus('processing');
+      setModalMessage('Verification / Registration in progress. Please wait...');
+      setShowModal(true);
+
+      // Send the form data to your server
+      const response = await fetch('http://localhost:5000/api/ngo/register', {
+        method: 'POST',
+        body: formDataToSend,
+      });
+
+      // Guard for non-JSON or empty responses
+      const contentType = response.headers.get('content-type') || '';
+      let result = {};
+      if (contentType.includes('application/json')) {
+        try {
+          result = await response.json();
+        } catch (err) {
+          // JSON parse failed
+          result = { success: response.ok, message: 'Invalid JSON response from server' };
+        }
+      } else {
+        // fallback to plain text (useful if server returns HTML or text)
+        const text = await response.text();
+        result = { success: response.ok, message: text || (response.ok ? 'Success' : 'Server error') };
+      }
+
+      console.log('Registration response:', result);
+
+
+      if (!response.ok || !result.success) {
+        // Show error inside modal
+        setModalStatus('error');
+        setModalMessage(result.message || 'Server returned an error. Please check the form and try again.');
+        return;
+      }
+
+      // Store JWT token for future API calls
+      if (result.data && result.data.token) {
+        localStorage.setItem('token', result.data.token);
+        if (result.data.refreshToken) localStorage.setItem('refreshToken', result.data.refreshToken);
+        if (result.data.user) localStorage.setItem('user', JSON.stringify(result.data.user));
+      }
+
+      // Show success message in modal then redirect after short delay
+      setModalStatus('success');
+      setModalMessage('Registration done. Your account has been submitted and is under review.');
+
+      // optional: small delay then redirect automatically
+      setTimeout(() => {
+        setShowModal(false);
+        navigate('/ngo-dashboard');
+      }, 1800);
+
+    } catch (error) {
+      console.error('Error during form submission:', error);
+      setModalStatus('error');
+      setModalMessage(error.message || 'Network or server issue. Please try again later.');
     }
   };
+
 
   return (
     <>
@@ -848,14 +1109,14 @@ export default function NGORegistration() {
 
         {/* Registration Section */}
         <div className="flex-grow-1 d-flex align-items-center justify-content-center" style={{ paddingTop: '80px' }}>
-            <div className="col-lg-8">
+          <div className="col-lg-8">
             <div className="border-0 shadow-lg card rounded-4">
-                <div className="p-4 card-body">
+              <div className="p-4 card-body">
 
 
-                  <form onSubmit={handleSubmit}>
-                    {/* Step 1 */}
-                    {step === 1 && (
+                <form onSubmit={handleSubmit}>
+                  {/* Step 1 */}
+                  {step === 1 && (
                     <>
                       {/* Step Header */}
                       <div className="step-header">
@@ -876,15 +1137,15 @@ export default function NGORegistration() {
                                 <i className="fas fa-building"></i>
                                 Organization Name*
                               </label>
-                        <input
-                          type="text"
+                              <input
+                                type="text"
                                 className={`form-control-enhanced ${errors.orgName ? 'is-invalid' : ''}`}
-                          name="orgName"
+                                name="orgName"
                                 value={formData.orgName || ''}
-                          onChange={handleChange}
+                                onChange={handleChange}
                                 placeholder="Enter your organization name"
-                          required
-                        />
+                                required
+                              />
                               {errors.orgName && <div className="invalid-feedback">{errors.orgName}</div>}
                             </div>
                           </div>
@@ -894,15 +1155,15 @@ export default function NGORegistration() {
                                 <i className="fas fa-id-card"></i>
                                 PAN Number*
                               </label>
-                        <input
-                          type="text"
+                              <input
+                                type="text"
                                 className={`form-control-enhanced ${errors.panNumber ? 'is-invalid' : ''}`}
-                          name="panNumber"
+                                name="panNumber"
                                 value={formData.panNumber || ''}
-                          onChange={handleChange}
+                                onChange={handleChange}
                                 placeholder="Enter PAN number"
-                          required
-                        />
+                                required
+                              />
                               {errors.panNumber && <div className="invalid-feedback">{errors.panNumber}</div>}
                             </div>
                           </div>
@@ -922,15 +1183,15 @@ export default function NGORegistration() {
                                 <i className="fas fa-envelope"></i>
                                 Email Address*
                               </label>
-                        <input
-                          type="email"
+                              <input
+                                type="email"
                                 className={`form-control-enhanced ${errors.email ? 'is-invalid' : ''}`}
-                          name="email"
+                                name="email"
                                 value={formData.email || ''}
-                          onChange={handleChange}
+                                onChange={handleChange}
                                 placeholder="Enter email address"
-                          required
-                        />
+                                required
+                              />
                               {errors.email && <div className="invalid-feedback">{errors.email}</div>}
                             </div>
                           </div>
@@ -940,15 +1201,15 @@ export default function NGORegistration() {
                                 <i className="fas fa-phone"></i>
                                 Contact Number*
                               </label>
-                        <input
-                          type="tel"
+                              <input
+                                type="tel"
                                 className={`form-control-enhanced ${errors.phone ? 'is-invalid' : ''}`}
-                          name="phone"
+                                name="phone"
                                 value={formData.phone || ''}
-                          onChange={handleChange}
+                                onChange={handleChange}
                                 placeholder="Enter contact number"
-                          required
-                        />
+                                required
+                              />
                               {errors.phone && <div className="invalid-feedback">{errors.phone}</div>}
                             </div>
                           </div>
@@ -967,15 +1228,15 @@ export default function NGORegistration() {
                               <i className="fas fa-key"></i>
                               Password*
                             </label>
-                        <input
-                          type="password"
+                            <input
+                              type="password"
                               className={`form-control-enhanced ${errors.password ? 'is-invalid' : ''}`}
-                          name="password"
+                              name="password"
                               value={formData.password || ''}
                               onChange={handleChange}
                               placeholder="Create a strong password"
-                          required
-                        />
+                              required
+                            />
                             {formData.password && (
                               <div className="password-strength-container">
                                 <div className="password-strength-bar">
@@ -1020,10 +1281,10 @@ export default function NGORegistration() {
                         </div>
                       </div>
                     </>
-                    )}
+                  )}
 
-                    {/* Step 2 */}
-                    {step === 2 && (
+                  {/* Step 2 */}
+                  {step === 2 && (
                     <>
                       {/* Step Header */}
                       <div className="step-header">
@@ -1082,15 +1343,15 @@ export default function NGORegistration() {
                                 <i className="fas fa-calendar"></i>
                                 Year of Establishment*
                               </label>
-                        <input
-                          type="number"
+                              <input
+                                type="number"
                                 className={`form-control-enhanced ${errors.establishmentYear ? 'is-invalid' : ''}`}
-                          name="establishmentYear"
+                                name="establishmentYear"
                                 value={formData.establishmentYear || ''}
-                          onChange={handleChange}
+                                onChange={handleChange}
                                 placeholder="Enter establishment year"
-                          required
-                        />
+                                required
+                              />
                               {errors.establishmentYear && <div className="invalid-feedback">{errors.establishmentYear}</div>}
                             </div>
                           </div>
@@ -1100,22 +1361,22 @@ export default function NGORegistration() {
                                 <i className="fas fa-bullseye"></i>
                                 Focus Area*
                               </label>
-                        <select
+                              <select
                                 className={`form-select-enhanced ${errors.focusArea ? 'is-invalid' : ''}`}
-                          name="focusArea"
+                                name="focusArea"
                                 value={formData.focusArea || ''}
-                          onChange={handleChange}
-                          required
-                        >
-                          <option value="">Select Focus Area</option>
-                          <option value="education">Education</option>
-                          <option value="healthcare">Healthcare</option>
-                          <option value="environment">Environment</option>
-                          <option value="women_empowerment">Women Empowerment</option>
-                          <option value="rural_development">Rural Development</option>
-                          <option value="skill_development">Skill Development</option>
-                          <option value="other">Other</option>
-                        </select>
+                                onChange={handleChange}
+                                required
+                              >
+                                <option value="">Select Focus Area</option>
+                                <option value="education">Education</option>
+                                <option value="healthcare">Healthcare</option>
+                                <option value="environment">Environment</option>
+                                <option value="women_empowerment">Women Empowerment</option>
+                                <option value="rural_development">Rural Development</option>
+                                <option value="skill_development">Skill Development</option>
+                                <option value="other">Other</option>
+                              </select>
                               {errors.focusArea && <div className="invalid-feedback">{errors.focusArea}</div>}
                             </div>
                           </div>
@@ -1131,60 +1392,60 @@ export default function NGORegistration() {
                         <div className="address-section">
                           <div className="form-group-enhanced">
                             <label className="form-label">Street Address*</label>
-                        <input
-                          type="text"
+                            <input
+                              type="text"
                               className={`form-control-enhanced ${errors.address ? 'is-invalid' : ''}`}
-                          name="address"
+                              name="address"
                               value={formData.address || ''}
-                          onChange={handleChange}
+                              onChange={handleChange}
                               placeholder="Enter complete street address"
-                          required
-                        />
+                              required
+                            />
                             {errors.address && <div className="invalid-feedback">{errors.address}</div>}
                           </div>
                           <div className="row g-3">
                             <div className="col-md-6">
                               <div className="form-group-enhanced">
                                 <label className="form-label">City*</label>
-                        <input
-                          type="text"
+                                <input
+                                  type="text"
                                   className={`form-control-enhanced ${errors.city ? 'is-invalid' : ''}`}
-                          name="city"
+                                  name="city"
                                   value={formData.city || ''}
-                          onChange={handleChange}
+                                  onChange={handleChange}
                                   placeholder="Enter city name"
-                          required
-                        />
+                                  required
+                                />
                                 {errors.city && <div className="invalid-feedback">{errors.city}</div>}
                               </div>
                             </div>
                             <div className="col-md-6">
                               <div className="form-group-enhanced">
                                 <label className="form-label">State*</label>
-                        <input
-                          type="text"
+                                <input
+                                  type="text"
                                   className={`form-control-enhanced ${errors.state ? 'is-invalid' : ''}`}
-                          name="state"
+                                  name="state"
                                   value={formData.state || ''}
-                          onChange={handleChange}
+                                  onChange={handleChange}
                                   placeholder="Enter state name"
-                          required
-                        />
+                                  required
+                                />
                                 {errors.state && <div className="invalid-feedback">{errors.state}</div>}
                               </div>
                             </div>
                             <div className="col-md-6">
                               <div className="form-group-enhanced">
                                 <label className="form-label">PIN Code*</label>
-                        <input
-                          type="text"
+                                <input
+                                  type="text"
                                   className={`form-control-enhanced ${errors.pincode ? 'is-invalid' : ''}`}
-                          name="pincode"
+                                  name="pincode"
                                   value={formData.pincode || ''}
-                          onChange={handleChange}
+                                  onChange={handleChange}
                                   placeholder="Enter 6-digit PIN code"
-                          required
-                        />
+                                  required
+                                />
                                 {errors.pincode && <div className="invalid-feedback">{errors.pincode}</div>}
                               </div>
                             </div>
@@ -1206,35 +1467,35 @@ export default function NGORegistration() {
                             </button>
                             <button type="button" className="btn btn-primary-enhanced btn-enhanced" onClick={nextStep}>
                               <i className="fas fa-arrow-right me-2"></i>
-                            Continue
-                          </button>
+                              Continue
+                            </button>
+                          </div>
                         </div>
                       </div>
-                      </div>
                     </>
-                    )}
+                  )}
 
-                    {/* Step 3 */}
-                    {step === 3 && (
+                  {/* Step 3 */}
+                  {step === 3 && (
                     <>
                       {/* Verification Header */}
                       <div className="verification-step">
                         <h3><i className="fas fa-shield-alt me-2"></i>Document Verification</h3>
                         <p className="subtitle">Please upload the required documents to complete your registration</p>
-                        </div>
+                      </div>
 
                       {/* Verification Progress */}
                       <div className="verification-progress">
                         <div className={`progress-item ${formData.ngoImage ? 'completed' : 'current'}`}>
                           <div className="progress-icon">
                             <i className={`fas ${formData.ngoImage ? 'fa-check' : 'fa-image'}`}></i>
-                        </div>
+                          </div>
                           <div className="progress-label">NGO Image</div>
                         </div>
                         <div className={`progress-item ${formData.FCRACert ? 'completed' : 'current'}`}>
                           <div className="progress-icon">
                             <i className={`fas ${formData.FCRACert ? 'fa-check' : 'fa-file-alt'}`}></i>
-                        </div>
+                          </div>
                           <div className="progress-label">FCRA Certificate</div>
                         </div>
                         <div className={`progress-item ${formData.terms ? 'completed' : 'current'}`}>
@@ -1257,11 +1518,11 @@ export default function NGORegistration() {
                               Upload your organization's image (PDF, JPG, PNG - Max 5MB)
                             </div>
                             <div className="file-input-wrapper">
-                              <input 
-                                type="file" 
-                                name="ngoImage" 
-                                accept=".pdf,.jpg,.jpeg,.png" 
-                                onChange={handleFileChange} 
+                              <input
+                                type="file"
+                                name="ngoImage"
+                                accept=".pdf,.jpg,.jpeg,.png"
+                                onChange={handleFileChange}
                                 required
                               />
                               <button type="button" className="file-upload-btn">
@@ -1295,11 +1556,11 @@ export default function NGORegistration() {
                               Upload your FCRA certificate (PDF, JPG, PNG - Max 5MB)
                             </div>
                             <div className="file-input-wrapper">
-                              <input 
-                                type="file" 
-                                name="FCRACert" 
-                                accept=".pdf,.jpg,.jpeg,.png" 
-                                onChange={handleFileChange} 
+                              <input
+                                type="file"
+                                name="FCRACert"
+                                accept=".pdf,.jpg,.jpeg,.png"
+                                onChange={handleFileChange}
                                 required
                               />
                               <button type="button" className="file-upload-btn">
@@ -1333,11 +1594,11 @@ export default function NGORegistration() {
                               Upload your 80G certificate (PDF, JPG, PNG - Max 5MB)
                             </div>
                             <div className="file-input-wrapper">
-                              <input 
-                                type="file" 
-                                name="80gCert" 
-                                accept=".pdf,.jpg,.jpeg,.png" 
-                                onChange={handleFileChange} 
+                              <input
+                                type="file"
+                                name="80gCert"
+                                accept=".pdf,.jpg,.jpeg,.png"
+                                onChange={handleFileChange}
                                 required
                               />
                               <button type="button" className="file-upload-btn">
@@ -1371,11 +1632,11 @@ export default function NGORegistration() {
                               Upload your 16A certificate (PDF, JPG, PNG - Max 5MB)
                             </div>
                             <div className="file-input-wrapper">
-                              <input 
-                                type="file" 
-                                name="16ACert" 
-                                accept=".pdf,.jpg,.jpeg,.png" 
-                                onChange={handleFileChange} 
+                              <input
+                                type="file"
+                                name="16ACert"
+                                accept=".pdf,.jpg,.jpeg,.png"
+                                onChange={handleFileChange}
                                 required
                               />
                               <button type="button" className="file-upload-btn">
@@ -1409,11 +1670,11 @@ export default function NGORegistration() {
                               Upload your trust deed certificate (PDF, JPG, PNG - Max 5MB)
                             </div>
                             <div className="file-input-wrapper">
-                              <input 
-                                type="file" 
-                                name="TrustDeedCert" 
-                                accept=".pdf,.jpg,.jpeg,.png" 
-                                onChange={handleFileChange} 
+                              <input
+                                type="file"
+                                name="TrustDeedCert"
+                                accept=".pdf,.jpg,.jpeg,.png"
+                                onChange={handleFileChange}
                                 required
                               />
                               <button type="button" className="file-upload-btn">
@@ -1440,14 +1701,14 @@ export default function NGORegistration() {
                         <div className="col-12">
                           <div className="terms-card">
                             <div className="form-check d-flex align-items-start">
-                              <input 
-                                type="checkbox" 
-                                className={`form-check-input mt-1 ${errors.terms ? 'is-invalid' : ''}`} 
-                                id="termsCheck" 
-                                name="terms" 
+                              <input
+                                type="checkbox"
+                                className={`form-check-input mt-1 ${errors.terms ? 'is-invalid' : ''}`}
+                                id="termsCheck"
+                                name="terms"
                                 checked={formData.terms || false}
-                                onChange={handleChange} 
-                                required 
+                                onChange={handleChange}
+                                required
                                 style={{
                                   marginTop: '0.25rem',
                                   marginRight: '0.75rem',
@@ -1470,21 +1731,136 @@ export default function NGORegistration() {
                       <div className="mt-4 d-flex justify-content-between">
                         <button type="button" className="btn btn-outline-secondary btn-lg" onClick={prevStep}>
                           <i className="fas fa-arrow-left me-2"></i>
-                            Back
-                          </button>
-                        <button type="submit" className="btn btn-primary btn-lg">
+                          Back
+                        </button>
+                        <button type="submit" className="btn btn-primary btn-lg" disabled={modalStatus === 'processing' && showModal}>
                           <i className="fas fa-check-circle me-2"></i>
-                            Complete Registration
-                          </button>
-                        </div>
+                          {modalStatus === 'processing' && showModal ? 'Submitting...' : 'Complete Registration'}
+                        </button>
+                      </div>
                     </>
-                    )}
-                  </form>
-                </div>
+                  )}
+                </form>
               </div>
             </div>
           </div>
         </div>
+      </div>
+      {/* Verification Modal / Overlay */}
+      {/* Minimal Success / Error Modal — click anywhere to close and return to "Complete Registration" page */}
+      {/* Minimal Success / Error Modal — fixed size, click anywhere to close */}
+      {showModal && (
+        <div
+          className="modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="modalTitle"
+          aria-describedby="modalDesc"
+          onMouseDown={() => {
+            setShowModal(false);
+            setStep(3); // stay on the registration page
+          }}
+          style={{ cursor: 'pointer' }}
+        >
+          <div
+            className="modal-card text-center"
+            onMouseDown={(e) => e.stopPropagation()}
+            style={{
+              cursor: 'default',
+              width: '450px',
+              height: '250px',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              transition: 'all 0.2s ease-in-out',
+            }}
+          >
+            {/* Processing */}
+            {modalStatus === 'processing' && (
+              <>
+                <div
+                  className="modal-spinner"
+                  aria-hidden="true"
+                  style={{ marginBottom: '15px' }}
+                />
+                <div
+                  id="modalTitle"
+                  className="modal-title"
+                  style={{ fontSize: '1.3rem', fontWeight: '700', marginBottom: '5px' }}
+                >
+                  Verifying...
+                </div>
+                <div
+                  id="modalDesc"
+                  className="modal-desc"
+                  style={{ fontSize: '0.95rem', color: '#6c757d' }}
+                >
+                  {modalMessage}
+                </div>
+              </>
+            )}
+
+            {/* Success */}
+            {modalStatus === 'success' && (
+              <>
+                <i
+                  className="fas fa-check-circle"
+                  aria-hidden="true"
+                  style={{
+                    fontSize: '80px',
+                    color: '#28a745',
+                    marginBottom: '12px',
+                  }}
+                />
+                <div
+                  id="modalTitle"
+                  className="modal-title"
+                  style={{ fontSize: '1.3rem', fontWeight: '700', color: '#28a745' }}
+                >
+                  Registration Successful
+                </div>
+                <div
+                  id="modalDesc"
+                  className="modal-desc"
+                  style={{ fontSize: '1rem', color: '#444', marginTop: '5px' }}
+                >
+                  {modalMessage}
+                </div>
+              </>
+            )}
+
+            {/* Error */}
+            {modalStatus === 'error' && (
+              <>
+                <i
+                  className="fas fa-times-circle"
+                  aria-hidden="true"
+                  style={{
+                    fontSize: '80px',
+                    color: '#dc3545',
+                    marginBottom: '12px',
+                  }}
+                />
+                <div
+                  id="modalTitle"
+                  className="modal-title"
+                  style={{ fontSize: '1.3rem', fontWeight: '700', color: '#dc3545' }}
+                >
+                  Registration Failed
+                </div>
+                <div
+                  id="modalDesc"
+                  className="modal-desc"
+                  style={{ fontSize: '1rem', color: '#444', marginTop: '5px' }}
+                >
+                  {modalMessage}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </>
   );
 }
