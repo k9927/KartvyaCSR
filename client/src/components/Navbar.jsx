@@ -34,16 +34,16 @@ const Navbar = () => {
       <div className="px-4 mx-auto max-w-7xl sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
           <Link to="/" className="flex items-center no-underline">
-            <span className="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+            <span className="text-xl font-bold text-transparent bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text">
               CSR
             </span>
-            <span className="text-xl font-bold text-gray-800 ml-1">Connect</span>
+            <span className="ml-1 text-xl font-bold text-gray-800">Connect</span>
           </Link>
           
           {/* Mobile menu button */}
           <div className="md:hidden">
             <button 
-              className="text-gray-600 hover:text-gray-900 focus:outline-none transition-colors duration-200"
+              className="text-gray-600 transition-colors duration-200 hover:text-gray-900 focus:outline-none"
               onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
             >
               <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -100,7 +100,7 @@ const Navbar = () => {
         {/* Mobile menu */}
         {isMobileMenuOpen && (
           <div className="md:hidden">
-            <div className="px-2 pt-2 pb-3 space-y-1 bg-white/95 backdrop-blur-md rounded-lg shadow-lg mt-2 border border-gray-100">
+            <div className="px-2 pt-2 pb-3 mt-2 space-y-1 border border-gray-100 rounded-lg shadow-lg bg-white/95 backdrop-blur-md">
               <Link 
                 to="/success-stories" 
                 className={`no-underline block px-3 py-2 rounded-md text-base font-medium transition-all duration-200 ${
@@ -136,7 +136,7 @@ const Navbar = () => {
               </Link>
               <Link 
                 to="/SelectType" 
-                className="no-underline block px-3 py-2 text-white bg-gradient-to-r from-green-600 to-emerald-600 rounded-md text-base font-medium transition-all duration-200 hover:from-green-700 hover:to-emerald-700 mt-2"
+                className="block px-3 py-2 mt-2 text-base font-medium text-white no-underline transition-all duration-200 rounded-md bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700"
                 onClick={() => setIsMobileMenuOpen(false)}
               >
                 Register Now

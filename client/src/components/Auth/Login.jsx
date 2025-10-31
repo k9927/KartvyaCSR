@@ -43,22 +43,25 @@ const Login = () => {
         throw new Error(result.message || 'Login failed');
       }
 
-      // Store token in localStorage
-      localStorage.setItem('token', result.token);
-      localStorage.setItem('user', JSON.stringify(result.user));
+      // Support both { data: { user, token, refreshToken }} and flat { user, token, refreshToken }
+      const payload = result.data || result;
+      const user = payload.user;
+      const token = payload.token;
+      const refreshToken = payload.refreshToken;
 
-      // Show success message
-      alert(`Login Successful!\n\nWelcome ${result.user.profile?.company_name || result.user.profile?.organization_name || result.user.email}\n\nUser Type: ${result.user.user_type.toUpperCase()}\nStatus: ${result.user.status.toUpperCase()}`);
+      // Store tokens and user in localStorage
+      localStorage.setItem('token', token);
+      if (refreshToken) localStorage.setItem('refreshToken', refreshToken);
+      localStorage.setItem('user', JSON.stringify(user));
 
-      // Redirect based on user type and status
-      if (result.user.status === 'verified') {
-        if (result.user.user_type === 'corporate') {
-          navigate('/corporate-dashboard');
-        } else if (result.user.user_type === 'ngo') {
-          navigate('/ngo-dashboard');
-        }
+      // Redirect based on user type
+      const userType = user?.user_type;
+      if (userType === 'corporate') {
+        navigate('/corporate-dashboard');
+      } else if (userType === 'ngo') {
+        navigate('/ngo-dashboard');
       } else {
-        navigate('/pending-verification');
+        navigate('/');
       }
 
     } catch (error) {

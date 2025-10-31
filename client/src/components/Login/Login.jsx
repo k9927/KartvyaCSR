@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import "bootstrap/dist/css/bootstrap.min.css";
 import "@fortawesome/fontawesome-free/css/all.min.css";
 import Navbar from '../Navbar';
@@ -182,13 +182,32 @@ const styles = `
     font-size: 0.9rem;
     font-weight: 500;
   }
+
+  /* Modal spinner styles copied to match NGO interface */
+  .modal-overlay { position: fixed; inset: 0; background: linear-gradient(rgba(0,0,0,0.35), rgba(0,0,0,0.45)); display: flex; align-items: center; justify-content: center; z-index: 2000; padding: 20px; backdrop-filter: blur(4px); }
+  .modal-card { width: 460px; max-width: 100%; background: linear-gradient(180deg, #ffffff 0%, #fbfbfd 100%); border-radius: 14px; padding: 28px 26px 26px; box-shadow: 0 20px 45px rgba(12,18,32,0.28); text-align: center; border: 1px solid rgba(21,28,46,0.04); }
+  .modal-spinner { width: 64px; height: 64px; margin: 0 auto 10px; border-radius: 50%; border: 6px solid rgba(0,0,0,0.06); border-top-color: #3b6be0; animation: modalSpin 1s linear infinite; box-shadow: 0 6px 18px rgba(59,107,224,0.12), inset 0 -6px 12px rgba(59,107,224,0.03); }
+  @keyframes modalSpin { to { transform: rotate(360deg); } }
+  .modal-title { font-size: 1.25rem; font-weight: 700; color: #1b2430; margin: 6px 0 6px; }
+  .modal-desc { color: #6b7280; margin-bottom: 8px; font-size: 0.98rem; }
+  .modal-status-icon { font-size: 56px; line-height: 1; margin-bottom: 8px; }
+  .modal-status-card { margin: 0 auto 8px; padding: 12px 14px; border-radius: 10px; max-width: 90%; font-weight: 600; }
+  .modal-success { background: #e9fff2; color: #0f6b3c; border: 1px solid rgba(40,167,69,0.08); }
+  .modal-error { background: #fff0f0; color: #7a1a1a; border: 1px solid rgba(218,77,87,0.06); }
+  .btn-modal { padding: 0.62rem 1.15rem; min-width: 120px; border-radius: 999px; border: none; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; font-size: 1rem; font-weight: 700; line-height: 1; box-shadow: 0 8px 20px rgba(12,18,32,0.06); }
+  .btn-close { background: linear-gradient(180deg,#eef0f2 0%, #e0e4e7 100%); color: #26303a; }
 `;
 
 export default function Login() {
+  const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(false);
   const [errors, setErrors] = useState({});
+  const [isLoading, setIsLoading] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+  const [modalStatus, setModalStatus] = useState('processing'); // 'processing' | 'success' | 'error'
+  const [modalMessage, setModalMessage] = useState('Signing you in. Please wait...');
 
   const validateForm = () => {
     const newErrors = {};
@@ -209,12 +228,53 @@ export default function Login() {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     
-    if (validateForm()) {
-      // TODO: Replace with Firebase authentication logic
-      console.log("Login attempt:", { email, password, remember });
+    if (!validateForm()) return;
+    
+    try {
+      setIsLoading(true);
+      setShowModal(true);
+      setModalStatus('processing');
+      setModalMessage('Authenticating your credentials...');
+      const response = await fetch('http://localhost:5000/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+      const result = await response.json();
+      if (!response.ok || result.success === false) {
+        throw new Error(result.message || 'Login failed');
+      }
+      const payload = result.data || result; // support both shapes
+      const user = payload.user;
+      const token = payload.token;
+      const refreshToken = payload.refreshToken;
+
+      if (!user || !token) throw new Error('Invalid login response');
+
+      localStorage.setItem('token', token);
+      if (refreshToken) localStorage.setItem('refreshToken', refreshToken);
+      localStorage.setItem('user', JSON.stringify(user));
+
+      const userType = user.user_type;
+      setModalStatus('success');
+      setModalMessage('Login successful. Redirecting to your dashboard...');
+      if (userType === 'corporate') {
+        setTimeout(() => navigate('/corporate-dashboard'), 800);
+      } else if (userType === 'ngo') {
+        setTimeout(() => navigate('/ngo-dashboard'), 800);
+      } else {
+        setTimeout(() => navigate('/'), 800);
+      }
+    } catch (err) {
+      setErrors(prev => ({ ...prev, general: err.message }));
+      setModalStatus('error');
+      setModalMessage(err.message || 'Login failed. Please try again.');
+    }
+    finally {
+      setIsLoading(false);
     }
   };
 
@@ -238,8 +298,8 @@ export default function Login() {
         {/* Login Section */}
         <div className="flex-grow-1 d-flex align-items-center justify-content-center" style={{ paddingTop: '80px' }}>
           <div className="col-md-6 col-lg-5">
-            <div className="card border-0 shadow-lg rounded-4">
-              <div className="card-body p-4">
+            <div className="border-0 shadow-lg card rounded-4">
+              <div className="p-4 card-body">
                 {/* Login Header */}
                 <div className="login-header">
                   <h2><i className="fas fa-sign-in-alt me-2"></i>Welcome Back</h2>
@@ -309,11 +369,57 @@ export default function Login() {
                   {/* Login Button */}
                   <button
                     type="submit"
-                    className="btn btn-primary-enhanced btn-enhanced w-100 mb-4"
+                    className="mb-4 btn btn-primary-enhanced btn-enhanced w-100"
+                    disabled={isLoading}
                   >
-                    <i className="fas fa-sign-in-alt me-2"></i>
-                    Sign In
+                    {isLoading ? (
+                      <>
+                        <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                        Signing In...
+                      </>
+                    ) : (
+                      <>
+                        <i className="fas fa-sign-in-alt me-2"></i>
+                        Sign In
+                      </>
+                    )}
                   </button>
+
+                  {showModal && (
+                    <div className="modal-overlay" role="dialog" aria-modal="true" aria-live="assertive">
+                      <div className="modal-card">
+                        {modalStatus === 'processing' && (
+                          <>
+                            <div className="modal-spinner" aria-hidden="true" style={{ marginBottom: '15px' }}></div>
+                            <div className="modal-title">Signing In</div>
+                            <div className="modal-desc">{modalMessage}</div>
+                          </>
+                        )}
+
+                        {modalStatus === 'success' && (
+                          <>
+                            <i className="fas fa-check-circle modal-status-icon" style={{ color: '#28a745' }}></i>
+                            <div className="modal-status-card modal-success">Login Successful</div>
+                            <div className="modal-desc">{modalMessage}</div>
+                          </>
+                        )}
+
+                        {modalStatus === 'error' && (
+                          <>
+                            <i className="fas fa-times-circle modal-status-icon" style={{ color: '#dc3545' }}></i>
+                            <div className="modal-status-card modal-error">Login Failed</div>
+                            <div className="modal-desc">{modalMessage}</div>
+                            <div className="mt-2">
+                              <button type="button" className="btn-modal btn-close" onClick={() => setShowModal(false)}>
+                                <i className="fas fa-times"></i>
+                                Close
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Divider */}
                   <div className="divider">
