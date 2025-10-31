@@ -159,7 +159,11 @@ const authenticate = async (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = { id: decoded.id, email: decoded.email, role: decoded.role };
+    req.user = {
+      id: decoded.id,
+      email: decoded.email,
+      role: decoded.role || decoded.user_type || null
+    };
     next();
   } catch (err) {
     return sendErrorResponse(res, 401, "Invalid or expired token", err, 'Authentication');
@@ -172,6 +176,8 @@ const authenticate = async (req, res, next) => {
 app.get("/", (req, res) => {
   res.send("PixelForge Nexus Server is running ✅");
 });
+
+
 
 // Register route
 app.post("/api/auth/register", async (req, res) => {
@@ -210,9 +216,9 @@ app.post("/api/auth/register", async (req, res) => {
 
     // Create user
     const newUser = await db.query(
-      `INSERT INTO users (email, password_hash, name, created_at) 
-       VALUES ($1, $2, $3, NOW()) RETURNING id, email, name`,
-      [email, hashedPassword, name]
+      `INSERT INTO users (email, password_hash, name, user_type, created_at) 
+       VALUES ($1, $2, $3, $4, NOW()) RETURNING id, email, name`,
+      [email, hashedPassword, name, 'user']
     );
 
     // Generate JWT token for auto-login
@@ -256,7 +262,7 @@ app.post("/api/auth/login", async (req, res) => {
 
     // Find user by email
     const user = await db.query(
-      'SELECT id, email, password_hash, name FROM users WHERE email = $1',
+      'SELECT id, email, password_hash, name, user_type, created_at, last_login FROM users WHERE email = $1',
       [email]
     );
 
@@ -282,19 +288,33 @@ app.post("/api/auth/login", async (req, res) => {
     const token = jwt.sign(
       {
         id: userData.id,
-        email: userData.email
+        email: userData.email,
+        user_type: userData.user_type || null
       },
       process.env.JWT_SECRET,
-      { expiresIn: '24h' }
+      { expiresIn: '15m' }
+    );
+
+    const refreshToken = jwt.sign(
+      {
+        id: userData.id,
+        type: 'refresh'
+      },
+      process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET,
+      { expiresIn: '7d' }
     );
 
     const loginData = {
       user: {
         id: userData.id,
         email: userData.email,
-        name: userData.name
+        name: userData.name,
+        user_type: userData.user_type,
+        created_at: userData.created_at,
+        last_login: userData.last_login
       },
-      token
+      token,
+      refreshToken
     };
 
     sendSuccessResponse(res, loginData, "Welcome back! Login successful", 'User Login');
@@ -515,7 +535,9 @@ app.post("/api/ngo/register", upload.fields([
   { name: '16ACert', maxCount: 1 },
   { name: 'TrustDeedCert', maxCount: 1 }
 ]), async (req, res) => {
+  const client = await db.connect();
   try {
+    await client.query('BEGIN');
     const {
       orgName,
       panNumber,
@@ -532,46 +554,72 @@ app.post("/api/ngo/register", upload.fields([
       terms
     } = req.body;
 
-    // Validate required fields
+    // Validate required fields (unchanged)
     if (!orgName || !panNumber || !email || !phone || !description || 
-        !establishmentYear || !focusArea || !address || !city || 
-        !state || !pincode || !password || !terms) {
+      !establishmentYear || !focusArea || !address || !city || 
+      !state || !pincode || !password || !terms) {
+      await client.query('ROLLBACK');
       return sendErrorResponse(res, 400, "All required fields must be provided", null, 'NGO Registration');
     }
 
-    // Validate email format
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return sendErrorResponse(res, 400, "Please provide a valid email address", null, 'NGO Registration');
-    }
-
-    // Validate password strength
-    if (password.length < 8) {
-      return sendErrorResponse(res, 400, "Password must be at least 8 characters long", null, 'NGO Registration');
-    }
-
-    // Check if email already exists
-    const existingEmail = await db.query(
+    // Duplicate email check
+    const existingEmail = await client.query(
       'SELECT id FROM users WHERE email = $1',
       [email]
     );
-
     if (existingEmail.rows.length > 0) {
+      await client.query('ROLLBACK');
       return sendErrorResponse(res, 409, "An account with this email already exists", null, 'NGO Registration');
+    }
+
+    // Duplicate PAN check
+    const existingPAN = await client.query(
+      'SELECT id FROM ngo_profiles WHERE pan_number = $1',
+      [panNumber]
+    );
+    if (existingPAN.rows.length > 0) {
+      await client.query('ROLLBACK');
+      return sendErrorResponse(res, 409, "An account with this PAN number already exists", null, 'NGO Registration');
     }
 
     // Hash password
     const saltRounds = 12;
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-    // Create user (simplified for now)
-    const newUser = await db.query(
-      `INSERT INTO users (email, password_hash, name, created_at) 
-       VALUES ($1, $2, $3, NOW()) RETURNING id, email, name, created_at`,
-      [email, hashedPassword, orgName]
+    // Insert user
+    const newUser = await client.query(
+      `INSERT INTO users (email, password_hash, name, user_type, created_at)
+       VALUES ($1, $2, $3, $4, NOW()) RETURNING id, email, name, created_at`,
+      [email, hashedPassword, orgName, 'ngo']
     );
 
-    // Generate JWT tokens for auto-login after registration
+    // Insert profile (make sure you have this table)
+    await client.query(
+      `INSERT INTO ngo_profiles (
+        user_id, organization_name, pan_number, phone, description, establishment_year,
+        focus_area, address, city, state, pincode, created_at, updated_at
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6,
+        $7, $8, $9, $10, $11, NOW(), NOW()
+      )`,
+      [
+        newUser.rows[0].id,
+        orgName,
+        panNumber,
+        phone,
+        description,
+        establishmentYear,
+        focusArea,
+        address,
+        city,
+        state,
+        pincode
+      ]
+    );
+
+    await client.query('COMMIT');
+
+    // Generate JWT tokens
     const token = jwt.sign(
       {
         id: newUser.rows[0].id,
@@ -579,16 +627,15 @@ app.post("/api/ngo/register", upload.fields([
         user_type: 'ngo'
       },
       process.env.JWT_SECRET,
-      { expiresIn: '15m' } // Short-lived access token
+      { expiresIn: '15m' }
     );
-
     const refreshToken = jwt.sign(
       {
         id: newUser.rows[0].id,
         type: 'refresh'
       },
       process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET,
-      { expiresIn: '7d' } // Long-lived refresh token
+      { expiresIn: '7d' }
     );
 
     const responseData = {
@@ -600,20 +647,6 @@ app.post("/api/ngo/register", upload.fields([
         status: 'pending',
         created_at: newUser.rows[0].created_at
       },
-      profile: {
-        organization_name: orgName,
-        pan_number: panNumber,
-        phone: phone,
-        address: address,
-        city: city,
-        state: state,
-        pincode: pincode
-      },
-      documents: req.files ? Object.keys(req.files).map(key => ({
-        type: key,
-        filename: req.files[key][0].originalname,
-        status: 'uploaded'
-      })) : [],
       token,
       refreshToken
     };
@@ -621,10 +654,12 @@ app.post("/api/ngo/register", upload.fields([
     sendSuccessResponse(res, responseData, "NGO registration successful! Your account is under review.", 'NGO Registration');
 
   } catch (error) {
+    await client.query('ROLLBACK');
     sendErrorResponse(res, 500, "Registration failed. Please try again later.", error, 'NGO Registration');
+  } finally {
+    client.release();
   }
 });
-
 // =============================================
 // CORPORATE REGISTRATION API
 // =============================================
@@ -634,7 +669,9 @@ app.post("/api/corporate/register", upload.fields([
   { name: 'registrationCert', maxCount: 1 },
   { name: 'csrPolicy', maxCount: 1 }
 ]), async (req, res) => {
+  const client = await db.connect();
   try {
+    await client.query('BEGIN');
     const {
       companyName,
       cinNumber,
@@ -653,46 +690,71 @@ app.post("/api/corporate/register", upload.fields([
       terms
     } = req.body;
 
-    // Validate required fields
-    if (!companyName || !cinNumber || !email || !phone || !address || 
-        !city || !state || !pincode || !csrBudget || !committeeSize || 
-        !focusArea || !regions || !password || !terms) {
+    // Validate required fields (unchanged)
+    if (!companyName || !cinNumber || !email || !phone || !address ||
+      !city || !state || !pincode || !csrBudget || !committeeSize ||
+      !focusArea || !regions || !password || !terms) {
+      await client.query('ROLLBACK');
       return sendErrorResponse(res, 400, "All required fields must be provided", null, 'Corporate Registration');
     }
-
-    // Validate email format
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return sendErrorResponse(res, 400, "Please provide a valid email address", null, 'Corporate Registration');
-    }
-
-    // Validate password strength
-    if (password.length < 8) {
-      return sendErrorResponse(res, 400, "Password must be at least 8 characters long", null, 'Corporate Registration');
-    }
-
-    // Check if email already exists
-    const existingEmail = await db.query(
+    // Email duplicate check
+    const existingEmail = await client.query(
       'SELECT id FROM users WHERE email = $1',
       [email]
     );
-
     if (existingEmail.rows.length > 0) {
+      await client.query('ROLLBACK');
       return sendErrorResponse(res, 409, "An account with this email already exists", null, 'Corporate Registration');
     }
-
+    // Duplicate CIN check
+    const existingCIN = await client.query(
+      'SELECT id FROM corporate_profiles WHERE cin_number = $1',
+      [cinNumber]
+    );
+    if (existingCIN.rows.length > 0) {
+      await client.query('ROLLBACK');
+      return sendErrorResponse(res, 409, "An account with this CIN number already exists", null, 'Corporate Registration');
+    }
     // Hash password
     const saltRounds = 12;
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-    // Create user (simplified for now)
-    const newUser = await db.query(
-      `INSERT INTO users (email, password_hash, name, created_at) 
-       VALUES ($1, $2, $3, NOW()) RETURNING id, email, name, created_at`,
-      [email, hashedPassword, companyName]
+    // Insert user
+    const newUser = await client.query(
+      `INSERT INTO users (email, password_hash, name, user_type, created_at)
+       VALUES ($1, $2, $3, $4, NOW()) RETURNING id, email, name, created_at`,
+      [email, hashedPassword, companyName, 'corporate']
     );
 
-    // Generate JWT tokens for auto-login after registration
+    // Insert profile
+    await client.query(
+      `INSERT INTO corporate_profiles (
+        user_id, company_name, cin_number, website, phone, address, city, state, pincode, csr_budget,
+        committee_size, primary_focus_area, preferred_region, created_at, updated_at
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+        $11, $12, $13, NOW(), NOW()
+      )`,
+      [
+        newUser.rows[0].id,
+        companyName,
+        cinNumber,
+        website || null,
+        phone,
+        address,
+        city,
+        state,
+        pincode,
+        csrBudget,             // <- now varchar!
+        committeeSize,
+        focusArea,
+        regions
+      ]
+    );
+    // All good, commit
+    await client.query('COMMIT');
+
+    // Tokens, response, etc. (unchanged)
     const token = jwt.sign(
       {
         id: newUser.rows[0].id,
@@ -700,16 +762,15 @@ app.post("/api/corporate/register", upload.fields([
         user_type: 'corporate'
       },
       process.env.JWT_SECRET,
-      { expiresIn: '15m' } // Short-lived access token
+      { expiresIn: '15m' }
     );
-
     const refreshToken = jwt.sign(
       {
         id: newUser.rows[0].id,
         type: 'refresh'
       },
       process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET,
-      { expiresIn: '7d' } // Long-lived refresh token
+      { expiresIn: '7d' }
     );
 
     const responseData = {
@@ -743,10 +804,12 @@ app.post("/api/corporate/register", upload.fields([
     sendSuccessResponse(res, responseData, "Corporate registration successful! Your account is under review.", 'Corporate Registration');
 
   } catch (error) {
+    await client.query('ROLLBACK');
     sendErrorResponse(res, 500, "Registration failed. Please try again later.", error, 'Corporate Registration');
+  } finally {
+    client.release();
   }
 });
-
 // =============================================
 // GLOBAL ERROR HANDLER
 // =============================================
@@ -782,4 +845,10 @@ app.listen(PORT, () => {
   console.log(`🚀 Server is running on http://localhost:${PORT}`);
   console.log(`📝 Enhanced error logging is enabled`);
   console.log(`🔧 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log('🗄️  Database target:', {
+    PGHOST: process.env.PGHOST,
+    PGDATABASE: process.env.PGDATABASE,
+    PGUSER: process.env.PGUSER,
+    PGPORT: process.env.PGPORT
+  });
 });

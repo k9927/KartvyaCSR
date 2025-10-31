@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import "bootstrap/dist/css/bootstrap.min.css";
 import "@fortawesome/fontawesome-free/css/all.min.css";
@@ -537,6 +537,120 @@ const styles = `
     background: #667eea;
     color: white;
   }
+
+  /* Modal overlay + spinner (match NGO experience) */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: linear-gradient(rgba(0,0,0,0.35), rgba(0,0,0,0.45));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+    padding: 20px;
+    backdrop-filter: blur(4px);
+  }
+
+  .modal-card {
+    width: 460px;
+    max-width: 100%;
+    background: linear-gradient(180deg, #ffffff 0%, #fbfbfd 100%);
+    border-radius: 14px;
+    padding: 28px 26px 26px;
+    box-shadow: 0 20px 45px rgba(12,18,32,0.28);
+    text-align: center;
+    position: relative;
+    border: 1px solid rgba(21,28,46,0.04);
+  }
+
+  .modal-spinner {
+    width: 64px;
+    height: 64px;
+    margin: 0 auto 10px;
+    border-radius: 50%;
+    border: 6px solid rgba(0,0,0,0.06);
+    border-top-color: #3b6be0;
+    animation: modalSpin 1s linear infinite;
+    box-shadow: 0 6px 18px rgba(59,107,224,0.12), inset 0 -6px 12px rgba(59,107,224,0.03);
+  }
+
+  @keyframes modalSpin { to { transform: rotate(360deg); } }
+
+  .modal-title {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #1b2430;
+    margin: 6px 0 6px;
+  }
+
+  .modal-desc {
+    color: #6b7280;
+    margin-bottom: 8px;
+    font-size: 0.98rem;
+  }
+
+  .modal-status-icon {
+    font-size: 56px;
+    line-height: 1;
+    margin-bottom: 8px;
+  }
+
+  .modal-status-card {
+    margin: 0 auto 8px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    max-width: 90%;
+    font-weight: 600;
+  }
+
+  .modal-success { background: #e9fff2; color: #0f6b3c; border: 1px solid rgba(40,167,69,0.08); }
+  .modal-error { background: #fff0f0; color: #7a1a1a; border: 1px solid rgba(218,77,87,0.06); }
+
+  .modal-actions {
+    display: flex;
+    gap: 0.9rem;
+    justify-content: center;
+    margin-top: 14px;
+    padding-top: 6px;
+  }
+
+  .btn-modal {
+    padding: 0.62rem 1.15rem;
+    min-width: 120px;
+    border-radius: 999px;
+    border: none;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    font-size: 1rem;
+    font-weight: 700;
+    line-height: 1;
+    box-shadow: 0 8px 20px rgba(12,18,32,0.06);
+    transition: transform 0.14s ease, box-shadow 0.14s ease, opacity 0.12s;
+  }
+
+  .btn-close {
+    background: linear-gradient(180deg,#eef0f2 0%, #e0e4e7 100%);
+    color: #26303a;
+  }
+
+  .btn-close:hover {
+    background: linear-gradient(180deg,#fff0f0,#ffdede);
+    color: #a12222;
+    transform: translateY(-3px);
+    box-shadow: 0 14px 30px rgba(233,75,75,0.10);
+  }
+
+  .btn-close i { transition: transform 0.12s ease, color 0.14s ease; }
+  .btn-close:hover i { color: #a12222; transform: translateY(-1px); }
+
+  @media (max-width: 520px) {
+    .modal-card { padding: 20px; border-radius: 12px; }
+    .modal-spinner { width: 54px; height: 54px; border-width: 5px; }
+    .btn-modal { min-width: 100px; padding: 0.5rem 1rem; font-size: 0.95rem; }
+  }
 `;
 
 export default function CorporateRegister() {
@@ -586,7 +700,7 @@ export default function CorporateRegister() {
     website: {
       validate: (value) => {
         if (!value) return true; // Optional field
-        return /^(https?:\/\/)?(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)$/.test(value);
+        return /^(https?:\/\/)?(www\.)?[-a-zA-Z0-9@:%._+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_+.~#?&//=]*)$/.test(value);
       },
       message: 'Please enter a valid website URL'
     },
@@ -662,10 +776,9 @@ export default function CorporateRegister() {
     const hasLower = /[a-z]/.test(password);
     const hasUpper = /[A-Z]/.test(password);
     const hasNumber = /\d/.test(password);
-    const hasSpecial = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password);
+    const hasSpecial = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>?/]/.test(password);
     const length = password.length;
     const hasMinLength = length >= 8;
-    const hasGoodLength = length >= 12;
 
     const requirements = [
       { met: hasLower, text: 'Lowercase letter' },
@@ -706,7 +819,7 @@ export default function CorporateRegister() {
     let isValid = true;
 
     switch (stepNumber) {
-      case 1:
+      case 1: {
         const step1Fields = ['companyName', 'cinNumber', 'email', 'phone', 'address', 'city', 'state', 'pincode', 'password'];
         step1Fields.forEach(field => {
           const value = formData[field];
@@ -725,8 +838,9 @@ export default function CorporateRegister() {
           isValid = false;
         }
         break;
+      }
 
-      case 2:
+      case 2: {
         const step2Fields = ['csrBudget', 'committeeSize', 'focusArea', 'regions'];
         step2Fields.forEach(field => {
           const value = formData[field];
@@ -739,8 +853,9 @@ export default function CorporateRegister() {
           }
         });
         break;
+      }
 
-      case 3:
+      case 3: {
         const step3Fields = ['registrationCert', 'csrPolicy'];
         step3Fields.forEach(field => {
           const value = formData[field];
@@ -764,6 +879,7 @@ export default function CorporateRegister() {
           isValid = false;
         }
         break;
+      }
 
       default:
         break;
@@ -835,6 +951,41 @@ export default function CorporateRegister() {
     setStep(3);
   };
 
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Modal spinner state (copied pattern from NGO register)
+  const [showModal, setShowModal] = useState(false);
+  const [modalStatus, setModalStatus] = useState('processing'); // 'processing' | 'success' | 'error'
+  const [modalMessage, setModalMessage] = useState('Verification / Registration in progress. Please wait...');
+
+  const closeButtonRef = useRef(null);
+
+  // lock body scroll when modal is open
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = showModal ? 'hidden' : prev;
+    return () => { document.body.style.overflow = prev; };
+  }, [showModal]);
+
+  // focus primary action when modal is open and not processing
+  useEffect(() => {
+    if (showModal && modalStatus !== 'processing') {
+      // small timeout so browser has rendered button
+      setTimeout(() => closeButtonRef.current?.focus(), 50);
+    }
+  }, [showModal, modalStatus]);
+
+  // close on Escape only when NOT processing
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape' && showModal && modalStatus !== 'processing') {
+        setShowModal(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [showModal, modalStatus]);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     
@@ -850,6 +1001,10 @@ export default function CorporateRegister() {
     
     if (isValid) {
       try {
+        setShowModal(true);
+        setModalStatus('processing');
+        setModalMessage('Submitting your corporate registration...');
+        setIsSubmitting(true);
         const formDataToSend = new FormData();
         
         // Append all form data
@@ -872,11 +1027,24 @@ export default function CorporateRegister() {
           body: formDataToSend,
         });
 
-        const result = await response.json();
+        let result;
+        const contentType = response.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          try {
+            result = await response.json();
+          } catch {
+            result = { success: response.ok, message: 'Invalid JSON response from server' };
+          }
+        } else {
+          const text = await response.text();
+          result = { success: response.ok, message: text || (response.ok ? 'Success' : 'Server error') };
+        }
         console.log('Registration response:', result);
 
         if (!response.ok || !result.success) {
-          throw new Error(result.message || 'Server returned an error');
+          setModalStatus('error');
+          setModalMessage(result.message || 'Registration failed. Please review your details and try again.');
+          return;
         }
 
         // Store JWT token for future API calls
@@ -886,15 +1054,19 @@ export default function CorporateRegister() {
           localStorage.setItem('user', JSON.stringify(result.data.user));
         }
         
-        // Success message
-        alert('🎉 Registration Successful! Your account is under review. Redirecting to login...');
-        
-        // Redirect to login page
-        window.location.href = '/Login';
+        // Show success and redirect shortly to Login
+        setModalStatus('success');
+        setModalMessage('Registration done. Your account is under review. Redirecting to login...');
+        setTimeout(() => {
+          window.location.href = '/Login';
+        }, 1800);
         
       } catch (error) {
         console.error('Error during form submission:', error);
-        alert(`Registration Failed: ${error.message || 'Please try again later.'}`);
+        setModalStatus('error');
+        setModalMessage(error.message || 'Registration failed. Please try again later.');
+      } finally {
+        setIsSubmitting(false);
       }
     }
   };
@@ -908,8 +1080,8 @@ export default function CorporateRegister() {
       {/* Registration Section */}
       <div className="flex-grow-1 d-flex align-items-center justify-content-center" style={{ paddingTop: '80px' }}>
         <div className="col-lg-8">
-          <div className="card border-0 shadow-lg rounded-4">
-            <div className="card-body p-4">
+          <div className="border-0 shadow-lg card rounded-4">
+            <div className="p-4 card-body">
 
 
               {/* Form */}
@@ -1283,7 +1455,7 @@ export default function CorporateRegister() {
                              <option value="central">Central India</option>
                              <option value="northeast">Northeast India</option>
                            </select>
-                           <small className="form-text text-muted mt-2">
+                           <small className="mt-2 form-text text-muted">
                              <i className="fas fa-info-circle me-1"></i>
                              Select your preferred region for CSR activities.
                            </small>
@@ -1447,7 +1619,7 @@ export default function CorporateRegister() {
                               <a href="#" className="text-primary fw-semibold">Privacy Policy</a>
                             </label>
                           </div>
-                          {errors.terms && <div className="invalid-feedback mt-2">{errors.terms}</div>}
+                          {errors.terms && <div className="mt-2 invalid-feedback">{errors.terms}</div>}
                         </div>
                       </div>
                     </div>
@@ -1458,14 +1630,59 @@ export default function CorporateRegister() {
                         <i className="fas fa-arrow-left me-2"></i>
                         Back
                       </button>
-                      <button type="submit" className="btn btn-primary btn-lg">
-                        <i className="fas fa-check-circle me-2"></i>
-                        Complete Registration
+                      <button type="submit" className="btn btn-primary btn-lg" disabled={isSubmitting}>
+                        {isSubmitting ? (
+                          <>
+                            <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                            Submitting...
+                          </>
+                        ) : (
+                          <>
+                            <i className="fas fa-check-circle me-2"></i>
+                            Complete Registration
+                          </>
+                        )}
                       </button>
                     </div>
                   </>
                 )}
               </form>
+
+              {showModal && (
+                <div className="modal-overlay" role="dialog" aria-modal="true" aria-live="assertive">
+                  <div className="modal-card">
+                    {modalStatus === 'processing' && (
+                      <>
+                        <div className="modal-spinner" aria-hidden="true" style={{ marginBottom: '15px' }}></div>
+                        <div className="modal-title">Processing Registration</div>
+                        <div className="modal-desc">{modalMessage}</div>
+                      </>
+                    )}
+
+                    {modalStatus === 'success' && (
+                      <>
+                        <i className="fas fa-check-circle modal-status-icon" style={{ color: '#28a745' }}></i>
+                        <div className="modal-status-card modal-success">Registration Successful</div>
+                        <div className="modal-desc">{modalMessage}</div>
+                      </>
+                    )}
+
+                    {modalStatus === 'error' && (
+                      <>
+                        <i className="fas fa-times-circle modal-status-icon" style={{ color: '#dc3545' }}></i>
+                        <div className="modal-status-card modal-error">Registration Failed</div>
+                        <div className="modal-desc">{modalMessage}</div>
+                        <div className="modal-actions">
+                          <button type="button" className="btn-modal btn-close" onClick={() => setShowModal(false)}>
+                            <i className="fas fa-times"></i>
+                            Close
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
