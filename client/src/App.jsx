@@ -6,6 +6,7 @@ import SelectType from './components/SelectType';
 import NGORegister from './components/Register/NgoRegister';
 import SuccessStories from './components/SuccessStories';
 import NGODashboard from "./components/NGO/NGODashboard"; 
+import CorporateDashboard from "./components/Corporate/CorporateDashboard";
 import AboutUs from './components/AboutUs';
 
 export default function App() {
@@ -21,6 +22,7 @@ export default function App() {
           <Route path="/success-stories" element={<SuccessStories/>} />
           <Route path="/about-us" element={<AboutUs/>} />
           <Route path="/ngo-dashboard" element={<NGODashboard />} />
+          <Route path="/corporate-dashboard/*" element={<CorporateDashboard />} />
         </Routes>
       </div>
     </Router>
