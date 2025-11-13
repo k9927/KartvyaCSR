@@ -1,5 +1,8 @@
 import AnalyticsPage from "./AnalyticsPage";
+import SettingsPage from "./SettingsPage"; // adjust path if different
+import ReportsPage from "./ReportsPage.jsx"; // adjust path if file sits in same folder
 import FundingPage from "./FundingPage";
+import { Bell } from "lucide-react";
 
 import React, { useState, useMemo, useRef, useEffect } from "react";
 
@@ -156,6 +159,34 @@ export default function NGODashboard() {
     const [projectsQuery, setProjectsQuery] = useState("");
     const [projectsFilter, setProjectsFilter] = useState("all"); // all | active | completed | archived
     const [projectsSort, setProjectsSort] = useState("newest"); // newest | progress_desc | progress_asc
+    // notification dropdown state
+    const [notifOpen, setNotifOpen] = useState(false);
+
+    const notifRef = useRef(null);
+    useEffect(() => {
+        function handleClickOutside(event) {
+            if (
+                notifRef.current &&
+                !notifRef.current.contains(event.target) &&
+                bellRef.current &&
+                !bellRef.current.contains(event.target)
+            ) {
+                setNotifOpen(false);
+            }
+        }
+
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => {
+            document.removeEventListener("mousedown", handleClickOutside);
+        };
+    }, []);
+
+    const bellRef = useRef(null);
+
+    // safe compute: handle case connectionHistory may be undefined
+    const notifications = (connectionHistory || [])
+        .filter(h => h.action === "Message Sent" || h.action === "Message" || h.action === "Message Sent via UI")
+        .slice(0, 5);
 
     // Modals for projects
     const [viewProject, setViewProject] = useState(null); // project object
@@ -779,17 +810,50 @@ export default function NGODashboard() {
                         </div>
                     </div>
 
-                    <div className="flex items-center gap-4">
-                        <div className="text-right mr-4">
-                            <p className="text-xs text-slate-500">Organization Type</p>
-                            <p className="text-sm font-medium text-slate-700">Registered NGO</p>
+                    {/* Header right side — notifications + verified badge */}
+                    <div className="flex items-center gap-6">
+                        {/* Notification Bell */}
+                        <div className="relative">
+                            <button
+                                ref={bellRef}
+                                onClick={() => setNotifOpen(!notifOpen)}
+                                className="p-2 bg-white border rounded-lg shadow-sm hover:shadow-md relative"
+                            >
+                                <Bell size={20} />
+                            </button>
+
+                            {notifOpen && (
+                                <div
+                                    ref={notifRef}
+                                    className="absolute right-0 mt-2 w-72 bg-white rounded-xl shadow-lg border p-4 z-50"
+                                >
+                                    <h4 className="font-semibold text-slate-700 mb-3">Messages</h4>
+
+                                    {notifications.length === 0 ? (
+                                        <p className="text-sm text-slate-500">No messages yet</p>
+                                    ) : (
+                                        <div className="space-y-3 max-h-60 overflow-y-auto">
+                                            {notifications.map((n) => (
+                                                <div key={n.id} className="p-3 bg-slate-50 rounded border">
+                                                    <p className="font-medium text-sm">{n.company}</p>
+                                                    <p className="text-xs text-slate-500">{n.note}</p>
+                                                    <p className="text-[10px] text-slate-400 mt-1">{n.date}</p>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                         </div>
 
+                        {/* Verified Badge (unchanged) */}
                         <div className="relative flex items-center gap-3 bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 rounded-full px-4 py-2 shadow-md">
                             <CheckCircle size={22} className="text-emerald-600" />
                             <div className="flex flex-col leading-tight">
                                 <span className="text-sm font-semibold text-emerald-700">Verified Organization</span>
-                                <span className="text-[11px] text-green-700">Badge ID: <span className="text-emerald-600 font-semibold">VF-2025-011</span></span>
+                                <span className="text-[11px] text-green-700">
+                                    Badge ID: <span className="text-emerald-600 font-semibold">VF-2025-011</span>
+                                </span>
                             </div>
                         </div>
                     </div>
@@ -803,6 +867,13 @@ export default function NGODashboard() {
                             fundData={fundData}
                             connectionHistory={connectionHistory}
                             acceptedConnections={acceptedConnections}
+                            showAlert={showAlert}
+                        />
+                    ) : activeNav === "reports" ? (
+                        <ReportsPage
+                            projects={projects}
+                            connectionHistory={connectionHistory}
+                            fundData={fundData}
                             showAlert={showAlert}
                         />
                     ) : activeNav === "projects" ? (
@@ -825,10 +896,10 @@ export default function NGODashboard() {
                                 <div className="max-w-xl mx-auto">
                                     <div
                                         className={`p-3 rounded-md text-sm ${alert.kind === "success"
-                                                ? "bg-green-50 text-green-700"
-                                                : alert.kind === "error"
-                                                    ? "bg-red-50 text-red-700"
-                                                    : "bg-indigo-50 text-indigo-700"
+                                            ? "bg-green-50 text-green-700"
+                                            : alert.kind === "error"
+                                                ? "bg-red-50 text-red-700"
+                                                : "bg-indigo-50 text-indigo-700"
                                             }`}
                                     >
                                         {alert.text}
@@ -848,147 +919,160 @@ export default function NGODashboard() {
                             acceptedConnections={acceptedConnections}
                             showAlert={showAlert}
                         />
-                    ) : (
-                        <>
-                            {/* Dashboard stat cards (clickable) */}
-                            <section className="grid md:grid-cols-4 gap-6">
-                                <div
-                                    role="button"
-                                    tabIndex={0}
-                                    onClick={() => setActiveNav("funding")}
-                                    className="bg-gradient-to-br from-teal-50 to-cyan-100 rounded-2xl shadow-sm p-5 border hover:border-cyan-300 hover:shadow-lg hover:scale-105 transform-gpu transition-all duration-300 cursor-pointer"
-                                >
-                                    <p className="text-sm text-slate-500">Total Funds</p>
-                                    <div className="flex justify-between items-center mt-1">
-                                        <h2 className="text-3xl font-extrabold text-cyan-700">
-                                            ₹
-                                            {fundData
-                                                .reduce((sum, d) => sum + d.value, 0)
-                                                .toLocaleString("en-IN")}
-                                        </h2>
-                                        <div className="bg-cyan-200 p-2 rounded-lg">
-                                            <HandCoins size={28} />
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <div
-                                    role="button"
-                                    tabIndex={0}
-                                    onClick={() => setActiveNav("projects")}
-                                    className="bg-gradient-to-br from-violet-50 to-purple-100 rounded-2xl shadow-sm p-5 border hover:border-violet-300 hover:shadow-lg hover:scale-105 transform-gpu transition-all duration-300 cursor-pointer"
-                                >
-                                    <p className="text-sm text-slate-500">Active Projects</p>
-                                    <div className="flex justify-between items-center mt-1">
-                                        <h2 className="text-3xl font-extrabold text-violet-700">
-                                            {projects.filter((p) => p.status === "active").length}
-                                        </h2>
-                                        <div className="bg-violet-200 p-2 rounded-lg">
-                                            <FolderKanban size={28} />
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <div
-                                    role="button"
-                                    tabIndex={0}
-                                    onClick={() => openConnectionsFromCard("accepted")}
-                                    className="bg-gradient-to-br from-teal-50 to-cyan-100 rounded-2xl shadow-sm p-5 border hover:border-cyan-300 hover:shadow-lg hover:scale-105 transform-gpu transition-all duration-300 cursor-pointer"
-                                >
-                                    <p className="text-sm text-slate-500">Connections</p>
-                                    <div className="flex justify-between items-center mt-1">
-                                        <h2 className="text-3xl font-extrabold text-cyan-700">
-                                            {acceptedConnections.length}
-                                        </h2>
-                                        <div className="bg-cyan-200 p-2 rounded-lg">
-                                            <Users size={28} />
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <div
-                                    role="button"
-                                    tabIndex={0}
-                                    onClick={() => setActiveNav("connections")}
-                                    className="bg-gradient-to-br from-violet-50 to-purple-100 rounded-2xl shadow-sm p-5 border hover:border-violet-300 hover:shadow-lg hover:scale-105 transform-gpu transition-all duration-300 cursor-pointer"
-                                >
-                                    <p className="text-sm text-slate-500">Pending Requests</p>
-                                    <div className="flex justify-between items-center mt-1">
-                                        <h2 className="text-3xl font-extrabold text-violet-700">
-                                            {csrRequests.length}
-                                        </h2>
-                                        <div className="bg-violet-200 p-2 rounded-lg">
-                                            <TrendingUp size={28} />
-                                        </div>
-                                    </div>
-                                </div>
-                            </section>
-
-                            {/* Two columns: CSR Requests + Fund Chart */}
-                            <section className="grid md:grid-cols-2 gap-6 mt-6">
-                                <div className="bg-white rounded-2xl shadow-lg p-6 border border-indigo-50 hover:shadow-xl transition-all duration-200">
-                                    <h2 className="text-xl font-semibold mb-4">Pending CSR Requests</h2>
-                                    {csrRequests.length === 0 ? (
-                                        <p className="text-slate-500">No pending requests 🎉</p>
-                                    ) : (
-                                        csrRequests.map((req) => (
-                                            <div
-                                                key={req.id}
-                                                className="border-b py-4 flex justify-between items-center"
-                                            >
-                                                <div>
-                                                    <h3 className="font-semibold">{req.company}</h3>
-                                                    <p className="text-sm text-slate-600">
-                                                        {req.project} —{" "}
-                                                        <span className="text-purple-600">{req.budget}</span>
-                                                    </p>
-                                                    <p className="text-xs text-slate-500 italic">{req.message}</p>
-                                                </div>
-                                                <div className="flex gap-2">
-                                                    <button
-                                                        onClick={() => acceptConnectionRequest(req.id)}
-                                                        className="px-3 py-1 rounded-lg bg-green-600 text-white hover:bg-green-700 transition-all"
-                                                    >
-                                                        Accept
-                                                    </button>
-                                                    <button
-                                                        onClick={() => declineConnectionRequest(req.id)}
-                                                        className="px-3 py-1 rounded-lg bg-red-600 text-white"
-                                                    >
-                                                        Decline
-                                                    </button>
-                                                </div>
+                    ) : activeNav === "settings" ? (
+                        <SettingsPage
+                            org={{ name: "Hope Foundation", darpanId: "VF-2025-011", email: "info@hope.org" }} // pass real data
+                            totalConnections={acceptedConnections.length}
+                            onUpdateOrg={(updated) => {
+                                // optional: integrate with parent state or API
+                                showAlert("Profile saved (demo)", "success");
+                            }}
+                            onHibernate={() => { /* optional parent handler */ }}
+                            onCloseAccount={() => { /* optional parent handler */ }}
+                            showAlert={showAlert}
+                        />
+                    ) :
+                        (
+                            <>
+                                {/* Dashboard stat cards (clickable) */}
+                                <section className="grid md:grid-cols-4 gap-6">
+                                    <div
+                                        role="button"
+                                        tabIndex={0}
+                                        onClick={() => setActiveNav("funding")}
+                                        className="bg-gradient-to-br from-teal-50 to-cyan-100 rounded-2xl shadow-sm p-5 border hover:border-cyan-300 hover:shadow-lg hover:scale-105 transform-gpu transition-all duration-300 cursor-pointer"
+                                    >
+                                        <p className="text-sm text-slate-500">Total Funds</p>
+                                        <div className="flex justify-between items-center mt-1">
+                                            <h2 className="text-3xl font-extrabold text-cyan-700">
+                                                ₹
+                                                {fundData
+                                                    .reduce((sum, d) => sum + d.value, 0)
+                                                    .toLocaleString("en-IN")}
+                                            </h2>
+                                            <div className="bg-cyan-200 p-2 rounded-lg">
+                                                <HandCoins size={28} />
                                             </div>
-                                        ))
-                                    )}
-                                </div>
-
-                                <div className="bg-white rounded-2xl shadow-lg p-6 border border-indigo-50 hover:shadow-xl transition-all duration-200">
-                                    <h2 className="text-xl font-semibold mb-4">Fund Distribution</h2>
-                                    <div className="flex justify-center items-center" style={{ height: 250 }}>
-                                        <ResponsiveContainer width="90%" height="100%">
-                                            <PieChart>
-                                                <Pie
-                                                    data={fundData}
-                                                    dataKey="value"
-                                                    nameKey="name"
-                                                    cx="50%"
-                                                    cy="50%"
-                                                    outerRadius={90}
-                                                    label
-                                                >
-                                                    {fundData.map((entry, index) => (
-                                                        <Cell key={index} fill={COLORS[index % COLORS.length]} />
-                                                    ))}
-                                                </Pie>
-                                                <Tooltip />
-                                            </PieChart>
-                                        </ResponsiveContainer>
+                                        </div>
                                     </div>
-                                </div>
-                            </section>
-                        </>
-                    )}
+
+                                    <div
+                                        role="button"
+                                        tabIndex={0}
+                                        onClick={() => setActiveNav("projects")}
+                                        className="bg-gradient-to-br from-violet-50 to-purple-100 rounded-2xl shadow-sm p-5 border hover:border-violet-300 hover:shadow-lg hover:scale-105 transform-gpu transition-all duration-300 cursor-pointer"
+                                    >
+                                        <p className="text-sm text-slate-500">Active Projects</p>
+                                        <div className="flex justify-between items-center mt-1">
+                                            <h2 className="text-3xl font-extrabold text-violet-700">
+                                                {projects.filter((p) => p.status === "active").length}
+                                            </h2>
+                                            <div className="bg-violet-200 p-2 rounded-lg">
+                                                <FolderKanban size={28} />
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div
+                                        role="button"
+                                        tabIndex={0}
+                                        onClick={() => openConnectionsFromCard("accepted")}
+                                        className="bg-gradient-to-br from-teal-50 to-cyan-100 rounded-2xl shadow-sm p-5 border hover:border-cyan-300 hover:shadow-lg hover:scale-105 transform-gpu transition-all duration-300 cursor-pointer"
+                                    >
+                                        <p className="text-sm text-slate-500">Connections</p>
+                                        <div className="flex justify-between items-center mt-1">
+                                            <h2 className="text-3xl font-extrabold text-cyan-700">
+                                                {acceptedConnections.length}
+                                            </h2>
+                                            <div className="bg-cyan-200 p-2 rounded-lg">
+                                                <Users size={28} />
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div
+                                        role="button"
+                                        tabIndex={0}
+                                        onClick={() => setActiveNav("connections")}
+                                        className="bg-gradient-to-br from-violet-50 to-purple-100 rounded-2xl shadow-sm p-5 border hover:border-violet-300 hover:shadow-lg hover:scale-105 transform-gpu transition-all duration-300 cursor-pointer"
+                                    >
+                                        <p className="text-sm text-slate-500">Pending Requests</p>
+                                        <div className="flex justify-between items-center mt-1">
+                                            <h2 className="text-3xl font-extrabold text-violet-700">
+                                                {csrRequests.length}
+                                            </h2>
+                                            <div className="bg-violet-200 p-2 rounded-lg">
+                                                <TrendingUp size={28} />
+                                            </div>
+                                        </div>
+                                    </div>
+                                </section>
+
+                                {/* Two columns: CSR Requests + Fund Chart */}
+                                <section className="grid md:grid-cols-2 gap-6 mt-6">
+                                    <div className="bg-white rounded-2xl shadow-lg p-6 border border-indigo-50 hover:shadow-xl transition-all duration-200">
+                                        <h2 className="text-xl font-semibold mb-4">Pending CSR Requests</h2>
+                                        {csrRequests.length === 0 ? (
+                                            <p className="text-slate-500">No pending requests 🎉</p>
+                                        ) : (
+                                            csrRequests.map((req) => (
+                                                <div
+                                                    key={req.id}
+                                                    className="border-b py-4 flex justify-between items-center"
+                                                >
+                                                    <div>
+                                                        <h3 className="font-semibold">{req.company}</h3>
+                                                        <p className="text-sm text-slate-600">
+                                                            {req.project} —{" "}
+                                                            <span className="text-purple-600">{req.budget}</span>
+                                                        </p>
+                                                        <p className="text-xs text-slate-500 italic">{req.message}</p>
+                                                    </div>
+                                                    <div className="flex gap-2">
+                                                        <button
+                                                            onClick={() => acceptConnectionRequest(req.id)}
+                                                            className="px-3 py-1 rounded-lg bg-green-600 text-white hover:bg-green-700 transition-all"
+                                                        >
+                                                            Accept
+                                                        </button>
+                                                        <button
+                                                            onClick={() => declineConnectionRequest(req.id)}
+                                                            className="px-3 py-1 rounded-lg bg-red-600 text-white"
+                                                        >
+                                                            Decline
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+
+                                    <div className="bg-white rounded-2xl shadow-lg p-6 border border-indigo-50 hover:shadow-xl transition-all duration-200">
+                                        <h2 className="text-xl font-semibold mb-4">Fund Distribution</h2>
+                                        <div className="flex justify-center items-center" style={{ height: 250 }}>
+                                            <ResponsiveContainer width="90%" height="100%">
+                                                <PieChart>
+                                                    <Pie
+                                                        data={fundData}
+                                                        dataKey="value"
+                                                        nameKey="name"
+                                                        cx="50%"
+                                                        cy="50%"
+                                                        outerRadius={90}
+                                                        label
+                                                    >
+                                                        {fundData.map((entry, index) => (
+                                                            <Cell key={index} fill={COLORS[index % COLORS.length]} />
+                                                        ))}
+                                                    </Pie>
+                                                    <Tooltip />
+                                                </PieChart>
+                                            </ResponsiveContainer>
+                                        </div>
+                                    </div>
+                                </section>
+                            </>
+                        )}
                 </main>
 
                 {/* Footer */}
