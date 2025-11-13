@@ -2,6 +2,18 @@ import AnalyticsPage from "./AnalyticsPage";
 import FundingPage from "./FundingPage";
 
 import React, { useState, useMemo, useRef, useEffect } from "react";
+import {
+    getUserProfile,
+    getNGODashboardStats,
+    getNGOProjects,
+    createNGOProject,
+    updateNGOProject,
+    deleteNGOProject,
+    getNGORequests,
+    acceptCSRRequest,
+    rejectCSRRequest,
+    getNGOPartnerships,
+} from "../../services/api";
 
 import {
     PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
@@ -23,27 +35,21 @@ export default function NGODashboard() {
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const [activeNav, setActiveNav] = useState("dashboard");
     const [alert, setAlert] = useState(null);
+    const [loading, setLoading] = useState(true);
+    const [userProfile, setUserProfile] = useState(null);
+    const [dashboardStats, setDashboardStats] = useState(null);
+    
     const showAlert = (text, kind = "info") => {
         setAlert({ text, kind, id: Date.now() });
         setTimeout(() => setAlert(null), 3000);
     };
 
-    // ---------- CSR Requests (existing) ----------
-    const [csrRequests, setCsrRequests] = useState([
-        { id: 1, company: "GreenEarth Pvt Ltd", project: "Tree Plantation Drive", budget: "₹2,00,000", message: "Partnering for environmental restoration", receivedAt: "2025-10-19" },
-        { id: 2, company: "TechForGood", project: "Digital Literacy Camp", budget: "₹1,50,000", message: "CSR for rural education", receivedAt: "2025-10-22" },
-    ]);
+    // ---------- CSR Requests ----------
+    const [csrRequests, setCsrRequests] = useState([]);
 
-    // ---------- Connections (simplified) ----------
-    const [acceptedConnections, setAcceptedConnections] = useState([
-        { id: 101, company: "HydroCare Ltd", connectedAt: "2025-09-20", contact: { name: "Arjun Patel", phone: "+91 98765 43210", email: "arjun@hydrocare.com" }, sharedInfo: "Funding for clean water initiative" },
-        { id: 102, company: "EduCorp India", connectedAt: "2025-08-02", contact: { name: "Meera Rao", phone: "+91 91234 56789", email: "meera@educorp.in" }, sharedInfo: "School renovation support" },
-    ]);
-
-    // --- Connections state & handlers (add near csrRequests / acceptedConnections) ---
-    const [connectionHistory, setConnectionHistory] = useState([
-        { id: 9001, company: "OldPartner Ltd", action: "Closed", note: "Project completed", date: "2025-07-15" },
-    ]);
+    // ---------- Connections / Partnerships ----------
+    const [acceptedConnections, setAcceptedConnections] = useState([]);
+    const [connectionHistory, setConnectionHistory] = useState([]);
     const [connSearchQuery, setConnSearchQuery] = useState("");
     const [connFilterTab, setConnFilterTab] = useState("incoming"); // incoming | accepted | history
 
@@ -54,36 +60,70 @@ export default function NGODashboard() {
 
     // actions (reuse / duplicate logic so ConnectionsPage works standalone)
     // Accept a CSR request and update counts (removes from csrRequests, adds to acceptedConnections & history)
-    const acceptConnectionRequest = (reqId) => {
+    const acceptConnectionRequest = async (reqId) => {
         const req = csrRequests.find(r => r.id === reqId);
         if (!req) return;
 
-        // remove from pending requests
-        setCsrRequests(prev => prev.filter(r => r.id !== reqId));
+        try {
+            showAlert("Processing acceptance...", "info");
+            const response = await acceptCSRRequest(reqId);
+            
+            if (response.success) {
+                // remove from pending requests
+                setCsrRequests(prev => prev.filter(r => r.id !== reqId));
 
-        // add to accepted connections
-        const newConn = {
-            id: Date.now(),
-            company: req.company,
-            connectedAt: new Date().toISOString().slice(0, 10),
-            contact: { name: "TBD", phone: "", email: "" },
-            sharedInfo: req.project + " — " + req.budget,
-        };
-        setAcceptedConnections(prev => [newConn, ...prev]);
+                // add to accepted connections
+                const partnership = response.data.partnership;
+                const newConn = {
+                    id: partnership.id,
+                    company: req.company,
+                    connectedAt: partnership.start_date || new Date().toISOString().slice(0, 10),
+                    contact: { name: "TBD", phone: "", email: "" },
+                    sharedInfo: req.project + " — " + req.budget,
+                    partnershipData: partnership,
+                };
+                setAcceptedConnections(prev => [newConn, ...prev]);
 
-        // add to connection history
-        setConnectionHistory(prev => [{ id: Date.now() + 1, company: req.company, action: "Accepted", note: req.project, date: new Date().toISOString().slice(0, 10) }, ...prev]);
+                // add to connection history
+                setConnectionHistory(prev => [{ id: Date.now() + 1, company: req.company, action: "Accepted", note: req.project, date: new Date().toISOString().slice(0, 10) }, ...prev]);
 
-        showAlert(`✅ Accepted connection from ${req.company}`, "success");
+                // Refresh data
+                const partnershipsResponse = await getNGOPartnerships({ status: 'active' });
+                if (partnershipsResponse.success && partnershipsResponse.data) {
+                    const parts = partnershipsResponse.data.partnerships || partnershipsResponse.data;
+                    const fundDataList = parts.map((p, idx) => ({
+                        name: p.company_name || `Partner ${idx + 1}`,
+                        value: parseFloat(p.agreed_budget || 0),
+                    }));
+                    setFundData(fundDataList);
+                }
+
+                showAlert(`✅ Accepted connection from ${req.company}`, "success");
+            }
+        } catch (error) {
+            console.error('Error accepting request:', error);
+            showAlert(`Failed to accept request: ${error.message}`, "error");
+        }
     };
 
 
-    const declineConnectionRequest = (reqId, reason = "Declined by NGO") => {
+    const declineConnectionRequest = async (reqId, reason = "Declined by NGO") => {
         const req = csrRequests.find(r => r.id === reqId);
         if (!req) return;
-        setCsrRequests(s => s.filter(r => r.id !== reqId));
-        setConnectionHistory(s => [{ id: Date.now() + 2, company: req.company, action: "Declined", note: reason, date: new Date().toISOString().slice(0, 10) }, ...s]);
-        showAlert(`❌ Declined ${req.company}`, "error");
+
+        try {
+            showAlert("Processing decline...", "info");
+            const response = await rejectCSRRequest(reqId, reason);
+            
+            if (response.success) {
+                setCsrRequests(s => s.filter(r => r.id !== reqId));
+                setConnectionHistory(s => [{ id: Date.now() + 2, company: req.company, action: "Declined", note: reason, date: new Date().toISOString().slice(0, 10) }, ...s]);
+                showAlert(`❌ Declined ${req.company}`, "error");
+            }
+        } catch (error) {
+            console.error('Error rejecting request:', error);
+            showAlert(`Failed to reject request: ${error.message}`, "error");
+        }
     };
 
     const closeConnection = (connId, note = "Closed by NGO") => {
@@ -107,55 +147,104 @@ export default function NGODashboard() {
     };
 
 
-    // ---------- Fund data for pie chart ----------
-    const [fundData, setFundData] = useState([
-        { name: "HydroCare Ltd", value: 300000 },
-        { name: "EduCorp India", value: 175000 },
-        { name: "GreenEarth Pvt Ltd", value: 200000 },
-    ]);
-
+    // ---------- Fund data for pie chart (derived from partnerships) ----------
+    const [fundData, setFundData] = useState([]);
     const COLORS = ["#14b8a6", "#ec4899", "#8b5cf6"];
 
-    // ---------- Projects data (NEW) ----------
-    const [projects, setProjects] = useState([
-        {
-            id: 201,
-            name: "Clean Water Initiative",
-            donor: "HydroCare Ltd",
-            funds: 300000,
-            fundsDisplay: "₹3,00,000",
-            progress: 80,
-            beneficiaries: 1200,
-            location: "Pune, Maharashtra",
-            status: "active", // active | completed | archived
-            startDate: "2025-05-10",
-            endDate: null,
-            documents: [
-                { id: "d1", name: "MoU.pdf", uploadedAt: "2025-05-11" },
-            ],
-            description: "Install community filters across 10 villages, awareness sessions.",
-        },
-        {
-            id: 202,
-            name: "School Renovation",
-            donor: "EduCorp India",
-            funds: 175000,
-            fundsDisplay: "₹1,75,000",
-            progress: 55,
-            beneficiaries: 450,
-            location: "Thrissur, Kerala",
-            status: "active",
-            startDate: "2025-07-01",
-            endDate: null,
-            documents: [],
-            description: "Classroom repairs, painting, furniture & sanitary works.",
-        },
-    ]);
+    // ---------- Projects data ----------
+    const [projects, setProjects] = useState([]);
 
     // ---------- Projects page UI state ----------
     const [projectsQuery, setProjectsQuery] = useState("");
     const [projectsFilter, setProjectsFilter] = useState("all"); // all | active | completed | archived
     const [projectsSort, setProjectsSort] = useState("newest"); // newest | progress_desc | progress_asc
+
+    // ---------- Fetch data on mount ----------
+    useEffect(() => {
+        const fetchDashboardData = async () => {
+            try {
+                setLoading(true);
+                
+                // Fetch user profile
+                const profileResponse = await getUserProfile();
+                if (profileResponse.success && profileResponse.data) {
+                    setUserProfile(profileResponse.data);
+                }
+
+                // Fetch dashboard stats
+                const statsResponse = await getNGODashboardStats();
+                if (statsResponse.success && statsResponse.data) {
+                    setDashboardStats(statsResponse.data);
+                }
+
+                // Fetch projects
+                const projectsResponse = await getNGOProjects();
+                if (projectsResponse.success && projectsResponse.data) {
+                    const projs = projectsResponse.data.projects || projectsResponse.data;
+                    setProjects(projs.map(p => ({
+                        id: p.id,
+                        name: p.title || p.name,
+                        duration: p.duration_months || 12,
+                        funds: parseFloat(p.budget_required || p.required_funding || 0),
+                        fundsDisplay: p.budget_display || `₹${Number(p.budget_required || p.required_funding || 0).toLocaleString('en-IN')}`,
+                        progress: p.progress || 0,
+                        beneficiaries: p.beneficiaries_count || 0,
+                        location: p.location || "N/A",
+                        status: p.status || "draft",
+                        startDate: p.start_date || null,
+                        endDate: p.end_date || null,
+                        documents: [],
+                        description: p.description || "",
+                    })));
+                }
+
+                // Fetch CSR requests
+                const requestsResponse = await getNGORequests();
+                if (requestsResponse.success && requestsResponse.data) {
+                    const reqs = requestsResponse.data.requests || requestsResponse.data;
+                    setCsrRequests(reqs.map(r => ({
+                        id: r.id,
+                        company: r.company_name || "Unknown Company",
+                        project: r.project_name || r.description || "General Partnership",
+                        budget: r.budget_display || `₹${Number(r.proposed_budget || 0).toLocaleString('en-IN')}`,
+                        message: r.message || r.description || "",
+                        receivedAt: r.requested_at ? new Date(r.requested_at).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
+                        status: r.status,
+                        requestData: r, // Keep original for API calls
+                    })));
+                }
+
+                // Fetch partnerships (accepted connections)
+                const partnershipsResponse = await getNGOPartnerships({ status: 'active' });
+                if (partnershipsResponse.success && partnershipsResponse.data) {
+                    const parts = partnershipsResponse.data.partnerships || partnershipsResponse.data;
+                    setAcceptedConnections(parts.map(p => ({
+                        id: p.id,
+                        company: p.company_name || "Unknown Company",
+                        connectedAt: p.start_date || p.created_at ? new Date(p.start_date || p.created_at).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
+                        contact: { name: "TBD", phone: "", email: "" },
+                        sharedInfo: p.partnership_name || p.project_name || `Budget: ${p.budget_display || "N/A"}`,
+                        partnershipData: p,
+                    })));
+
+                    // Update fund data from partnerships
+                    const fundDataList = parts.map((p, idx) => ({
+                        name: p.company_name || `Partner ${idx + 1}`,
+                        value: parseFloat(p.agreed_budget || 0),
+                    }));
+                    setFundData(fundDataList);
+                }
+
+            } catch (error) {
+                console.error('Error fetching dashboard data:', error);
+                showAlert(`Failed to load dashboard: ${error.message}`, "error");
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        fetchDashboardData();
+    }, []);
 
     // Modals for projects
     const [viewProject, setViewProject] = useState(null); // project object
@@ -164,19 +253,97 @@ export default function NGODashboard() {
     const [confirmDelete, setConfirmDelete] = useState({ open: false, projectId: null });
 
     // ---------- Helper functions (projects) ----------
-    const addProject = (project) => {
-        const newProject = { ...project, id: Date.now(), documents: [], startDate: (new Date()).toISOString().slice(0, 10), status: "active" };
-        setProjects((s) => [newProject, ...s]);
-        // history: project created
-        setConnectionHistory(prev => [{ id: Date.now() + 13, company: newProject.donor || newProject.name, action: "Project Created", note: newProject.name, date: (new Date()).toISOString().slice(0, 10) }, ...prev]);
-        showAlert("✅ Project added", "success");
-        setAddProjectOpen(false);
+    const addProject = async (project) => {
+        try {
+            showAlert("Creating project...", "info");
+            const projectData = {
+                name: project.name,
+                title: project.name,
+                description: project.description || "",
+                focus_area: project.focus_area || "general",
+                location: project.location || "",
+                target_region: project.target_region || null,
+                budget_required: parseFloat(project.fundsDisplay.replace(/\D/g, '')) || project.funds || 0,
+                beneficiaries_count: project.beneficiaries || null,
+                duration_months: project.duration || 12,
+                start_date: project.startDate || null,
+                end_date: project.endDate || null,
+            };
+
+            const response = await createNGOProject(projectData);
+            
+            if (response.success) {
+                const newProject = response.data.project;
+                const formattedProject = {
+                    id: newProject.id,
+                    name: newProject.title || newProject.name,
+                    duration: newProject.duration_months || 12,
+                    funds: parseFloat(newProject.budget_required || 0),
+                    fundsDisplay: newProject.budget_display || `₹${Number(newProject.budget_required || 0).toLocaleString('en-IN')}`,
+                    progress: newProject.progress || 0,
+                    beneficiaries: newProject.beneficiaries_count || 0,
+                    location: newProject.location || "N/A",
+                    status: newProject.status || "draft",
+                    startDate: newProject.start_date || null,
+                    endDate: newProject.end_date || null,
+                    documents: [],
+                    description: newProject.description || "",
+                };
+                
+                setProjects((s) => [formattedProject, ...s]);
+                setConnectionHistory(prev => [{ id: Date.now() + 13, company: formattedProject.name, action: "Project Created", note: formattedProject.name, date: (new Date()).toISOString().slice(0, 10) }, ...prev]);
+                showAlert("✅ Project added", "success");
+                setAddProjectOpen(false);
+            }
+        } catch (error) {
+            console.error('Error creating project:', error);
+            showAlert(`Failed to create project: ${error.message}`, "error");
+        }
     };
 
-    const updateProject = (id, patch) => {
-        setProjects((s) => s.map(p => p.id === id ? { ...p, ...patch } : p));
-        showAlert("✅ Project updated", "success");
-        setEditProject(null);
+    const updateProject = async (id, patch) => {
+        try {
+            showAlert("Updating project...", "info");
+            const updates = {
+                ...(patch.title !== undefined && { title: patch.title || patch.name }),
+                ...(patch.name !== undefined && { title: patch.name }),
+                ...(patch.description !== undefined && { description: patch.description }),
+                ...(patch.progress !== undefined && { progress: patch.progress }),
+                ...(patch.beneficiaries !== undefined && { beneficiaries_count: patch.beneficiaries }),
+                ...(patch.location !== undefined && { location: patch.location }),
+                ...(patch.status !== undefined && { status: patch.status }),
+            };
+
+            if (patch.fundsDisplay || patch.funds) {
+                updates.budget_required = parseFloat(patch.fundsDisplay?.replace(/\D/g, '') || patch.funds || 0);
+            }
+
+            if (patch.duration !== undefined) {
+                updates.duration_months = patch.duration;
+            }
+
+            const response = await updateNGOProject(id, updates);
+            
+            if (response.success) {
+                const updated = response.data.project;
+                setProjects((s) => s.map(p => p.id === id ? {
+                    ...p,
+                    name: updated.title || updated.name || p.name,
+                    funds: parseFloat(updated.budget_required || p.funds),
+                    fundsDisplay: updated.budget_display || p.fundsDisplay,
+                    progress: updated.progress || p.progress,
+                    beneficiaries: updated.beneficiaries_count || p.beneficiaries,
+                    duration: updated.duration_months || p.duration,
+                    location: updated.location || p.location,
+                    status: updated.status || p.status,
+                } : p));
+                showAlert("✅ Project updated", "success");
+                setEditProject(null);
+            }
+        } catch (error) {
+            console.error('Error updating project:', error);
+            showAlert(`Failed to update project: ${error.message}`, "error");
+        }
     };
 
     const uploadDocument = (projectId, fileName) => {
@@ -184,43 +351,74 @@ export default function NGODashboard() {
         showAlert("📎 Document uploaded", "info");
     };
 
-    const markComplete = (projectId) => {
+    const markComplete = async (projectId) => {
         const proj = projects.find(p => p.id === projectId);
-        setProjects((s) => s.map(p => p.id === projectId ? { ...p, status: "completed", progress: 100, endDate: (new Date()).toISOString().slice(0, 10) } : p));
-        // Add connection history entry tied to this project's donor (so it appears under Connections -> History)
-        if (proj) {
-            setConnectionHistory(prev => [{ id: Date.now() + 10, company: proj.donor || proj.name, action: "Project Completed", note: proj.name, date: (new Date()).toISOString().slice(0, 10) }, ...prev]);
+        try {
+            await updateNGOProject(projectId, {
+                status: "completed",
+                progress: 100,
+                end_date: (new Date()).toISOString().slice(0, 10),
+            });
+            setProjects((s) => s.map(p => p.id === projectId ? { ...p, status: "completed", progress: 100, endDate: (new Date()).toISOString().slice(0, 10) } : p));
+            if (proj) {
+                setConnectionHistory(prev => [{ id: Date.now() + 10, company: proj.name, action: "Project Completed", note: proj.name, date: (new Date()).toISOString().slice(0, 10) }, ...prev]);
+            }
+            showAlert("🎉 Project marked complete", "success");
+        } catch (error) {
+            console.error('Error marking project complete:', error);
+            showAlert(`Failed to mark complete: ${error.message}`, "error");
         }
-        showAlert("🎉 Project marked complete", "success");
     };
 
-    const archiveProject = (projectId) => {
+    const archiveProject = async (projectId) => {
         const proj = projects.find(p => p.id === projectId);
-        setProjects((s) => s.map(p => p.id === projectId ? { ...p, status: "archived" } : p));
-        if (proj) {
-            setConnectionHistory(prev => [{ id: Date.now() + 11, company: proj.donor || proj.name, action: "Project Archived", note: proj.name, date: (new Date()).toISOString().slice(0, 10) }, ...prev]);
+        try {
+            await updateNGOProject(projectId, { status: "archived" });
+            setProjects((s) => s.map(p => p.id === projectId ? { ...p, status: "archived" } : p));
+            if (proj) {
+                setConnectionHistory(prev => [{ id: Date.now() + 11, company: proj.name, action: "Project Archived", note: proj.name, date: (new Date()).toISOString().slice(0, 10) }, ...prev]);
+            }
+            showAlert("📦 Project archived", "info");
+        } catch (error) {
+            console.error('Error archiving project:', error);
+            showAlert(`Failed to archive project: ${error.message}`, "error");
         }
-        showAlert("📦 Project archived", "info");
     };
 
-    const deleteProject = (projectId) => {
+    const deleteProject = async (projectId) => {
         const proj = projects.find(p => p.id === projectId);
-        setProjects((s) => s.filter(p => p.id !== projectId));
-        setConfirmDelete({ open: false, projectId: null });
-        if (proj) {
-            setConnectionHistory(prev => [{ id: Date.now() + 14, company: proj.donor || proj.name, action: "Project Deleted", note: proj.name, date: (new Date()).toISOString().slice(0, 10) }, ...prev]);
+        try {
+            showAlert("Archiving project...", "info");
+            const response = await deleteNGOProject(projectId);
+            
+            if (response.success) {
+                setProjects((s) => s.filter(p => p.id !== projectId));
+                setConfirmDelete({ open: false, projectId: null });
+                if (proj) {
+                    setConnectionHistory(prev => [{ id: Date.now() + 14, company: proj.name, action: "Project Archived", note: proj.name, date: (new Date()).toISOString().slice(0, 10) }, ...prev]);
+                }
+                showAlert("🗑️ Project archived", "error");
+            }
+        } catch (error) {
+            console.error('Error deleting project:', error);
+            showAlert(`Failed to archive project: ${error.message}`, "error");
         }
-        showAlert("🗑️ Project deleted", "error");
     };
 
 
-    const unarchiveProject = (projectId) => {
+    const unarchiveProject = async (projectId) => {
         const proj = projects.find(p => p.id === projectId);
-        setProjects((s) => s.map(p => p.id === projectId ? { ...p, status: "active" } : p));
-        if (proj) {
-            setConnectionHistory(prev => [{ id: Date.now() + 12, company: proj.donor || proj.name, action: "Project Restored", note: proj.name, date: (new Date()).toISOString().slice(0, 10) }, ...prev]);
+        try {
+            await updateNGOProject(projectId, { status: "active" });
+            setProjects((s) => s.map(p => p.id === projectId ? { ...p, status: "active" } : p));
+            if (proj) {
+                setConnectionHistory(prev => [{ id: Date.now() + 12, company: proj.name, action: "Project Restored", note: proj.name, date: (new Date()).toISOString().slice(0, 10) }, ...prev]);
+            }
+            showAlert("✅ Project restored from archive", "success");
+        } catch (error) {
+            console.error('Error restoring project:', error);
+            showAlert(`Failed to restore project: ${error.message}`, "error");
         }
-        showAlert("✅ Project restored from archive", "success");
     };
 
 
@@ -231,7 +429,7 @@ export default function NGODashboard() {
         if (projectsFilter !== "all") res = res.filter(p => p.status === projectsFilter);
         if (projectsQuery) {
             const q = projectsQuery.toLowerCase();
-            res = res.filter(p => p.name.toLowerCase().includes(q) || p.donor.toLowerCase().includes(q) || p.location.toLowerCase().includes(q));
+            res = res.filter(p => p.name.toLowerCase().includes(q) || p.location.toLowerCase().includes(q));
         }
         if (projectsSort === "newest") res = res.sort((a, b) => b.id - a.id);
         if (projectsSort === "progress_desc") res = res.sort((a, b) => b.progress - a.progress);
@@ -263,7 +461,7 @@ export default function NGODashboard() {
                     <div className="flex items-start justify-between gap-4">
                         <div>
                             <h3 className="text-lg font-semibold">{project.name}</h3>
-                            <p className="text-sm text-slate-500">{project.donor} • {project.location}</p>
+                            <p className="text-sm text-slate-500">Duration: {project.duration} months • {project.location}</p>
                             <p className="text-xs text-slate-400 mt-1">Started: {project.startDate} {project.endDate ? `• End: ${project.endDate}` : ""}</p>
                         </div>
                         <div className="flex gap-2">
@@ -355,7 +553,7 @@ export default function NGODashboard() {
     function EditProjectModal({ project, onClose }) {
         if (!project) return null;
         const [form, setForm] = useState({
-            name: project.name, donor: project.donor, fundsDisplay: project.fundsDisplay,
+            name: project.name, duration: project.duration || 12, fundsDisplay: project.fundsDisplay,
             progress: project.progress, beneficiaries: project.beneficiaries, location: project.location, description: project.description
         });
 
@@ -370,7 +568,7 @@ export default function NGODashboard() {
 
                     <div className="mt-4 grid grid-cols-2 gap-4">
                         <input value={form.name} onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))} className="col-span-2 border p-2 rounded" />
-                        <input value={form.donor} onChange={(e) => setForm(f => ({ ...f, donor: e.target.value }))} className="border p-2 rounded" />
+                        <input type="number" value={form.duration} onChange={(e) => setForm(f => ({ ...f, duration: Number(e.target.value) || 12 }))} placeholder="Duration (months)" className="border p-2 rounded" />
                         <input value={form.fundsDisplay} onChange={(e) => setForm(f => ({ ...f, fundsDisplay: e.target.value }))} className="border p-2 rounded" />
                         <input value={String(form.progress)} onChange={(e) => setForm(f => ({ ...f, progress: Math.max(0, Math.min(100, Number(e.target.value || 0))) }))} type="number" min={0} max={100} className="border p-2 rounded" />
                         <input value={String(form.beneficiaries)} onChange={(e) => setForm(f => ({ ...f, beneficiaries: Number(e.target.value || 0) }))} type="number" className="border p-2 rounded" />
@@ -388,7 +586,7 @@ export default function NGODashboard() {
     }
 
     function AddProjectModal({ open, onClose }) {
-        const [form, setForm] = useState({ name: "", donor: "", fundsDisplay: "", progress: 0, beneficiaries: 0, location: "", description: "" });
+        const [form, setForm] = useState({ name: "", duration: 12, fundsDisplay: "", progress: 0, beneficiaries: 0, location: "", description: "" });
         if (!open) return null;
         return (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -401,7 +599,7 @@ export default function NGODashboard() {
 
                     <div className="mt-4 grid grid-cols-2 gap-4">
                         <input placeholder="Project name" value={form.name} onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))} className="col-span-2 border p-2 rounded" />
-                        <input placeholder="Donor" value={form.donor} onChange={(e) => setForm(f => ({ ...f, donor: e.target.value }))} className="border p-2 rounded" />
+                        <input type="number" placeholder="Duration (months)" value={form.duration} onChange={(e) => setForm(f => ({ ...f, duration: Number(e.target.value) || 12 }))} className="border p-2 rounded" />
                         <input placeholder="Funds (₹)" value={form.fundsDisplay} onChange={(e) => setForm(f => ({ ...f, fundsDisplay: e.target.value }))} className="border p-2 rounded" />
                         <input placeholder="Progress (%)" type="number" min={0} max={100} value={form.progress} onChange={(e) => setForm(f => ({ ...f, progress: Number(e.target.value || 0) }))} className="border p-2 rounded" />
                         <input placeholder="Beneficiaries" type="number" value={form.beneficiaries} onChange={(e) => setForm(f => ({ ...f, beneficiaries: Number(e.target.value || 0) }))} className="border p-2 rounded" />
@@ -411,7 +609,7 @@ export default function NGODashboard() {
 
                     <div className="mt-4 flex justify-end gap-2">
                         <button onClick={onClose} className="px-4 py-2 rounded-md bg-slate-100">Cancel</button>
-                        <button onClick={() => addProject({ ...form, funds: parseInt(form.fundsDisplay.replace(/\D/g, ''), 10) || 0, fundsDisplay: form.fundsDisplay })} className="px-4 py-2 rounded-md bg-green-600 text-white">Add</button>
+                        <button onClick={() => addProject({ ...form, funds: parseInt(form.fundsDisplay.replace(/\D/g, ''), 10) || 0, fundsDisplay: form.fundsDisplay, duration: form.duration || 12 })} className="px-4 py-2 rounded-md bg-green-600 text-white">Add</button>
                     </div>
                 </div>
             </div>
@@ -635,7 +833,7 @@ export default function NGODashboard() {
                 <div className="flex items-center justify-between gap-4">
                     <div>
                         <h2 className="text-xl font-semibold bg-gradient-to-r from-purple-600 to-indigo-600 bg-clip-text text-transparent font-[Poppins]">Active Projects</h2>
-                        <p className="text-sm text-slate-500">Manage your projects, donors, progress and documents</p>
+                        <p className="text-sm text-slate-500">Manage your projects, duration, progress and documents</p>
                     </div>
 
                     <div className="flex items-center gap-2">
@@ -646,7 +844,7 @@ export default function NGODashboard() {
                                 onChange={(e) => setProjectsQuery(e.target.value)}
                                 onKeyDown={(e) => e.stopPropagation()}        /* prevent parent shortcuts stealing focus */
                                 onMouseDown={(e) => e.stopPropagation()}      /* prevent pointer handlers stealing focus */
-                                placeholder="Search projects, donor, location..."
+                                placeholder="Search projects, location..."
                                 className="bg-transparent outline-none text-sm"
                                 autoFocus
                                 autoComplete="off"
@@ -689,7 +887,7 @@ export default function NGODashboard() {
                                             <h3 className="font-semibold">{p.name}</h3>
                                             <div className="text-xs text-slate-400 px-2 py-1 rounded bg-slate-100">{p.status}</div>
                                         </div>
-                                        <p className="text-sm text-slate-500">{p.donor} • {p.location}</p>
+                                        <p className="text-sm text-slate-500">Duration: {p.duration} months • {p.location}</p>
                                         <p className="text-xs text-slate-400 mt-1">Beneficiaries: <span className="font-medium">{p.beneficiaries}</span> • Funds: <span className="font-medium">{p.fundsDisplay}</span></p>
                                     </div>
                                 </div>
@@ -774,8 +972,12 @@ export default function NGODashboard() {
                     <div className="flex items-center gap-4">
                         <button onClick={() => setSidebarOpen(true)} className="p-2 bg-white border rounded-lg shadow-sm hover:shadow-md"><Menu size={20} /></button>
                         <div>
-                            <h1 className="text-xl font-bold text-indigo-700">Hope Foundation</h1>
-                            <p className="text-sm text-slate-500">Empowering Lives Through CSR Initiatives</p>
+                            <h1 className="text-xl font-bold text-indigo-700">
+                                {userProfile?.profile?.organization_name || userProfile?.user?.name || "NGO Dashboard"}
+                            </h1>
+                            <p className="text-sm text-slate-500">
+                                {userProfile?.profile?.tagline || "Empowering Lives Through CSR Initiatives"}
+                            </p>
                         </div>
                     </div>
 
@@ -797,7 +999,17 @@ export default function NGODashboard() {
 
                 {/* Content: show Projects page or Dashboard */}
                 <main className="p-6">
-                    {activeNav === "analytics" ? (
+                    {loading && (
+                        <div className="flex items-center justify-center min-h-[400px]">
+                            <div className="text-center">
+                                <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mb-4"></div>
+                                <p className="text-slate-600">Loading dashboard...</p>
+                            </div>
+                        </div>
+                    )}
+                    {!loading && (
+                        <>
+                        {activeNav === "analytics" ? (
                         <AnalyticsPage
                             projects={projects}
                             fundData={fundData}
@@ -881,7 +1093,7 @@ export default function NGODashboard() {
                                     <p className="text-sm text-slate-500">Active Projects</p>
                                     <div className="flex justify-between items-center mt-1">
                                         <h2 className="text-3xl font-extrabold text-violet-700">
-                                            {projects.filter((p) => p.status === "active").length}
+                                            {dashboardStats?.projectStats?.active || projects.filter((p) => p.status === "active").length}
                                         </h2>
                                         <div className="bg-violet-200 p-2 rounded-lg">
                                             <FolderKanban size={28} />
@@ -915,7 +1127,7 @@ export default function NGODashboard() {
                                     <p className="text-sm text-slate-500">Pending Requests</p>
                                     <div className="flex justify-between items-center mt-1">
                                         <h2 className="text-3xl font-extrabold text-violet-700">
-                                            {csrRequests.length}
+                                            {dashboardStats?.pendingRequests || csrRequests.filter(r => r.status === 'pending').length}
                                         </h2>
                                         <div className="bg-violet-200 p-2 rounded-lg">
                                             <TrendingUp size={28} />
@@ -988,6 +1200,8 @@ export default function NGODashboard() {
                                 </div>
                             </section>
                         </>
+                        )}
+                    </>
                     )}
                 </main>
 
