@@ -1,5 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+// at top, next to other imports
+import CorporateReports from "../Corporate/CorporateReports";
+
+// adjust the path to where the file actually lives relative to this file
+
 import {
     PieChart,
     Pie,
@@ -48,6 +53,9 @@ import {
     Calendar,
     Clock,
 } from "lucide-react";
+
+import { Bell } from "lucide-react";
+
 
 const FOCUS_AREA_OPTIONS = [
     { value: "education", label: "Education" },
@@ -197,9 +205,9 @@ const normalizeNgo = (item) => {
     const focusAreas = Array.isArray(focusAreasRaw)
         ? focusAreasRaw
         : String(focusAreasRaw ?? "")
-              .split(",")
-              .map((entry) => entry.trim())
-              .filter(Boolean);
+            .split(",")
+            .map((entry) => entry.trim())
+            .filter(Boolean);
     const normalizedFocusAreas = Array.from(
         new Set(
             focusAreas
@@ -333,6 +341,43 @@ export default function CorporateDashboard() {
     const [connSearchQuery, setConnSearchQuery] = useState("");
     const [connFocusFilter, setConnFocusFilter] = useState("");
     const [connVerifiedOnly, setConnVerifiedOnly] = useState(false);
+    // add in component body
+    const [bellOpen, setBellOpen] = useState(false);
+    const bellButtonRef = useRef(null);
+    const bellDropdownRef = useRef(null);
+
+    // sample notifications (replace with API data)
+    const [notifications] = useState([
+        // example items
+        // { id: 'n1', title: 'New request from Seva Foundation', body: 'Seva accepted your connection request.', time: '2h ago', from: 'Seva' }
+    ]);
+
+    const unreadCount = notifications.length; // change logic to count unread
+
+    // close on outside click / Esc
+    useEffect(() => {
+        function onDocClick(e) {
+            if (!bellOpen) return;
+            if (
+                bellDropdownRef.current &&
+                !bellDropdownRef.current.contains(e.target) &&
+                bellButtonRef.current &&
+                !bellButtonRef.current.contains(e.target)
+            ) {
+                setBellOpen(false);
+            }
+        }
+        function onKey(e) {
+            if (e.key === "Escape") setBellOpen(false);
+        }
+        document.addEventListener("click", onDocClick);
+        document.addEventListener("keydown", onKey);
+        return () => {
+            document.removeEventListener("click", onDocClick);
+            document.removeEventListener("keydown", onKey);
+        };
+    }, [bellOpen]);
+
     const connectionsSearchRef = useRef(null);
 
     const messageLoadTracker = useRef(new Set());
@@ -838,13 +883,12 @@ export default function CorporateDashboard() {
                                                 </div>
                                             </div>
                                             <span
-                                                className={`text-xs px-3 py-1 rounded-full font-medium ${
-                                                    item.status === "Accepted"
-                                                        ? "bg-emerald-100 text-emerald-600"
-                                                        : item.status === "Declined"
+                                                className={`text-xs px-3 py-1 rounded-full font-medium ${item.status === "Accepted"
+                                                    ? "bg-emerald-100 text-emerald-600"
+                                                    : item.status === "Declined"
                                                         ? "bg-rose-100 text-rose-600"
                                                         : "bg-amber-100 text-amber-600"
-                                                }`}
+                                                    }`}
                                             >
                                                 {item.status}
                                             </span>
@@ -1310,11 +1354,10 @@ export default function CorporateDashboard() {
                                 <button
                                     key={tab}
                                     onClick={() => setActiveTab(tab)}
-                                    className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
-                                        activeTab === tab
-                                            ? "bg-gradient-to-r from-indigo-500 to-purple-500 text-white shadow"
-                                            : "text-slate-500 hover:text-slate-700 hover:bg-slate-100"
-                                    }`}
+                                    className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${activeTab === tab
+                                        ? "bg-gradient-to-r from-indigo-500 to-purple-500 text-white shadow"
+                                        : "text-slate-500 hover:text-slate-700 hover:bg-slate-100"
+                                        }`}
                                 >
                                     {tab}
                                 </button>
@@ -1502,9 +1545,8 @@ export default function CorporateDashboard() {
                                             />
                                             <div className="absolute inset-0 bg-gradient-to-t from-slate-900/45 via-slate-900/10 to-transparent" />
                                             <span
-                                                className={`absolute top-3 left-3 px-3 py-1 text-xs font-semibold rounded-full text-white shadow-sm ${
-                                                    ngo.verified ? "bg-emerald-500/90" : "bg-amber-500/90"
-                                                }`}
+                                                className={`absolute top-3 left-3 px-3 py-1 text-xs font-semibold rounded-full text-white shadow-sm ${ngo.verified ? "bg-emerald-500/90" : "bg-amber-500/90"
+                                                    }`}
                                             >
                                                 {ngo.verified ? "Verified" : "Unverified"}
                                             </span>
@@ -2188,8 +2230,8 @@ export default function CorporateDashboard() {
                                     ngo.focusAreas.filter(
                                         (area) => normalizeFocusAreaValue(area) !== "general"
                                     ).length === 0) && (
-                                    <option value="">Not specified</option>
-                                )}
+                                        <option value="">Not specified</option>
+                                    )}
                             </select>
                         </div>
 
@@ -2363,14 +2405,15 @@ export default function CorporateDashboard() {
     }
 
     const navItems = [
-        { id: "dashboard", label: "Dashboard", icon: Home },
-        { id: "analytics", label: "Analytics", icon: BarChart2 },
-        { id: "funding", label: "Funding", icon: HandCoins },
-        { id: "projects", label: "Projects", icon: FolderKanban },
-        { id: "connections", label: "Connections", icon: Users },
-        { id: "reports", label: "Reports", icon: FileText },
-        { id: "settings", label: "Settings", icon: SettingsIcon },
+        { id: 'dashboard', to: '/dashboard', icon: Home, label: 'Dashboard' },
+        { id: 'analytics', to: '/dashboard/analytics', icon: BarChart2, label: 'Analytics' },
+        { id: 'funding', to: '/dashboard/funding', icon: HandCoins, label: 'Funding' },
+        { id: 'projects', to: '/dashboard/projects', icon: FolderKanban, label: 'Projects' },
+        { id: 'connections', to: '/dashboard/connections', icon: Users, label: 'Connections' },
+        { id: 'reports', to: '/dashboard/reports', icon: FileText, label: 'Reports' }, // <- here
+        { id: 'settings', to: '/dashboard/settings', icon: SettingsIcon, label: 'Settings' },
     ];
+
 
     const navContent = {
         dashboard: <DashboardPage />,
@@ -2378,9 +2421,10 @@ export default function CorporateDashboard() {
         funding: <FundingPage />,
         projects: <ProjectsPage />,
         connections: <ConnectionsPage />,
-        reports: <ReportsPage />,
+        reports: <CorporateReports />, // << use this exact component
         settings: <SettingsPage />,
     };
+
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-slate-50 to-indigo-50 flex text-slate-800 font-[Poppins]">
@@ -2392,9 +2436,8 @@ export default function CorporateDashboard() {
             )}
 
             <aside
-                className={`fixed top-0 left-0 h-full bg-white/95 backdrop-blur-md shadow-xl transform transition-transform duration-300 z-30 w-64 ${
-                    sidebarOpen ? "translate-x-0" : "-translate-x-full"
-                } ${sidebarPinned ? "lg:translate-x-0" : "lg:-translate-x-full"}`}
+                className={`fixed top-0 left-0 h-full bg-white/95 backdrop-blur-md shadow-xl transform transition-transform duration-300 z-30 w-64 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"
+                    } ${sidebarPinned ? "lg:translate-x-0" : "lg:-translate-x-full"}`}
             >
                 <div className="p-6 border-b flex items-center justify-between">
                     <h2 className="text-2xl font-extrabold bg-gradient-to-r from-purple-500 to-indigo-600 bg-clip-text text-transparent">
@@ -2419,20 +2462,15 @@ export default function CorporateDashboard() {
                                     setActiveNav(item.id);
                                     setSidebarOpen(false);
                                 }}
-                                className={`w-full text-left flex items-center gap-3 p-3 rounded-lg ${
-                                    active
-                                        ? "bg-indigo-50 ring-1 ring-indigo-200"
-                                        : "hover:bg-slate-50"
-                                }`}
+                                className={`w-full text-left flex items-center gap-3 p-3 rounded-lg ${active ? "bg-indigo-50 ring-1 ring-indigo-200" : "hover:bg-slate-50"
+                                    }`}
                             >
                                 <Icon
                                     size={18}
                                     className={active ? "text-indigo-600" : "text-slate-500"}
                                 />
                                 <span
-                                    className={`font-medium ${
-                                        active ? "text-indigo-700" : "text-slate-600"
-                                    }`}
+                                    className={`font-medium ${active ? "text-indigo-700" : "text-slate-600"}`}
                                 >
                                     {item.label}
                                 </span>
@@ -2441,10 +2479,7 @@ export default function CorporateDashboard() {
                     })}
 
                     <div className="mt-6 border-t pt-4">
-                        <button 
-                            onClick={handleLogout}
-                            className="w-full flex items-center gap-3 p-3 rounded-lg text-red-600 hover:bg-red-50"
-                        >
+                        <button onClick={handleLogout} className="w-full flex items-center gap-3 p-3 rounded-lg text-red-600 hover:bg-red-50">
                             <LogOut size={18} />
                             <span className="font-medium">Logout</span>
                         </button>
@@ -2453,9 +2488,8 @@ export default function CorporateDashboard() {
             </aside>
 
             <div
-                className={`flex flex-col flex-1 min-w-0 transition-all duration-300 ${
-                    sidebarPinned ? "lg:ml-64" : "lg:ml-0"
-                }`}
+                className={`flex flex-col flex-1 min-w-0 transition-all duration-300 ${sidebarPinned ? "lg:ml-64" : "lg:ml-0"
+                    }`}
             >
                 <header className="flex items-center justify-between p-6 bg-white border-b shadow sticky top-0 z-10">
                     <div className="flex items-center gap-4">
@@ -2485,6 +2519,68 @@ export default function CorporateDashboard() {
                     </div>
 
                     <div className="flex items-center gap-4">
+
+                        {/* Notification bell + dropdown */}
+                        <div className="relative">
+                            <button
+                                onClick={() => setBellOpen((s) => !s)}
+                                aria-haspopup="true"
+                                aria-expanded={bellOpen ? "true" : "false"}
+                                className="p-2 rounded-full hover:bg-slate-100 border shadow-sm flex items-center justify-center"
+                                ref={bellButtonRef}
+                            >
+                                <Bell size={18} className="text-slate-700" />
+                                {/* unread badge (optional) */}
+                                {unreadCount > 0 && (
+                                    <span className="absolute -top-0.5 -right-0.5 h-3 w-3 rounded-full bg-red-500 border-2 border-white text-[10px] flex items-center justify-center text-white">
+                                        {/* small dot; if you want a number swap with {unreadCount} */}
+                                    </span>
+                                )}
+                            </button>
+
+                            {/* dropdown */}
+                            {bellOpen && (
+                                <div
+                                    role="dialog"
+                                    aria-label="Notifications"
+                                    className="absolute right-0 mt-2 w-80 bg-white rounded-xl shadow-lg border p-4 z-50"
+                                    ref={bellDropdownRef}
+                                    tabIndex={-1}
+                                >
+                                    <div className="flex items-center justify-between mb-3">
+                                        <h4 className="text-lg font-semibold text-slate-800">Messages</h4>
+                                        <button onClick={() => { setBellOpen(false); }} className="text-slate-400 hover:text-slate-600 text-sm">Close</button>
+                                    </div>
+
+                                    {/* list (replace with real messages) */}
+                                    {notifications.length === 0 ? (
+                                        <div className="py-6 text-center text-slate-500">No messages yet</div>
+                                    ) : (
+                                        <ul className="space-y-3 max-h-60 overflow-auto">
+                                            {notifications.map((n) => (
+                                                <li key={n.id} className="flex items-start gap-3">
+                                                    <div className="w-10 h-10 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-600 font-medium">
+                                                        {n.from?.[0] ?? "M"}
+                                                    </div>
+                                                    <div className="flex-1">
+                                                        <div className="text-sm font-medium text-slate-800">{n.title}</div>
+                                                        <div className="text-xs text-slate-500 mt-1">{n.body}</div>
+                                                        <div className="text-[11px] text-slate-400 mt-1">{n.time}</div>
+                                                    </div>
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    )}
+
+                                    <div className="pt-3 mt-3 border-t text-right">
+                                        <button onClick={() => { /* navigate to full messages page if you have one */ setBellOpen(false); }} className="text-indigo-600 text-sm font-medium">
+                                            View all
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
                         <div className="text-right mr-4">
                             <p className="text-xs text-slate-500">CSR Budget</p>
                             <p className="text-sm font-medium text-slate-700">
@@ -2526,13 +2622,12 @@ export default function CorporateDashboard() {
 
             {alert && (
                 <div
-                    className={`fixed bottom-6 right-6 p-3 rounded shadow z-50 ${
-                        alert.kind === "success"
-                            ? "bg-green-50 text-green-700"
-                            : alert.kind === "error"
+                    className={`fixed bottom-6 right-6 p-3 rounded shadow z-50 ${alert.kind === "success"
+                        ? "bg-green-50 text-green-700"
+                        : alert.kind === "error"
                             ? "bg-red-50 text-red-700"
                             : "bg-indigo-50 text-indigo-700"
-                    }`}
+                        }`}
                 >
                     {alert.text}
                 </div>
