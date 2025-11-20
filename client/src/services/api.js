@@ -48,6 +48,9 @@ export const getUserProfile = () => apiRequest('/user/profile');
 export const getNGODashboardStats = () => apiRequest('/ngo/dashboard-stats');
 export const getCorporateDashboardStats = () => apiRequest('/corporate/dashboard-stats');
 
+// Auth APIs
+export const logout = () => apiRequest('/auth/logout', { method: 'POST' });
+
 // NGO Projects APIs
 export const createNGOProject = (projectData) => 
   apiRequest('/ngo/projects', {
