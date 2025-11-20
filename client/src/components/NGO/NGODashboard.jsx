@@ -4,7 +4,8 @@ import ReportsPage from "./ReportsPage.jsx"; // adjust path if file sits in same
 import FundingPage from "./FundingPage";
 import { Bell } from "lucide-react";
 
-import React, { useState, useMemo, useRef, useEffect } from "react";
+import React, { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import {
     getUserProfile,
     getNGODashboardStats,
@@ -16,6 +17,7 @@ import {
     acceptCSRRequest,
     rejectCSRRequest,
     getNGOPartnerships,
+    logout,
 } from "../../services/api";
 
 import {
@@ -24,7 +26,7 @@ import {
 import {
     Menu, X, CheckCircle, HandCoins, FolderKanban, Users, TrendingUp,
     Home, BarChart2, FileText, Settings, LogOut, Calendar, MapPin, FilePlus,
-    Edit2, Trash2, CheckSquare, Eye, PlusCircle,
+    Edit2, Trash2, CheckSquare, Eye, PlusCircle, Send,
 } from "lucide-react";
 
 /**
@@ -34,6 +36,7 @@ import {
  */
 
 export default function NGODashboard() {
+    const navigate = useNavigate();
     // ---------- Global UI state ----------
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const [activeNav, setActiveNav] = useState("dashboard");
@@ -46,6 +49,21 @@ export default function NGODashboard() {
         setAlert({ text, kind, id: Date.now() });
         setTimeout(() => setAlert(null), 3000);
     };
+
+    const handleLogout = useCallback(async () => {
+        try {
+            await logout();
+        } catch (error) {
+            console.error("Logout error:", error);
+        } finally {
+            // Clear localStorage
+            localStorage.removeItem('token');
+            localStorage.removeItem('refreshToken');
+            localStorage.removeItem('user');
+            // Navigate to home page
+            navigate('/');
+        }
+    }, [navigate]);
 
     // ---------- CSR Requests ----------
     const [csrRequests, setCsrRequests] = useState([]);
@@ -419,20 +437,20 @@ export default function NGODashboard() {
     const deleteProject = async (projectId) => {
         const proj = projects.find(p => p.id === projectId);
         try {
-            showAlert("Archiving project...", "info");
+            showAlert("Deleting project...", "info");
             const response = await deleteNGOProject(projectId);
             
             if (response.success) {
                 setProjects((s) => s.filter(p => p.id !== projectId));
                 setConfirmDelete({ open: false, projectId: null });
                 if (proj) {
-                    setConnectionHistory(prev => [{ id: Date.now() + 14, company: proj.name, action: "Project Archived", note: proj.name, date: (new Date()).toISOString().slice(0, 10) }, ...prev]);
+                    setConnectionHistory(prev => [{ id: Date.now() + 14, company: proj.name, action: "Project Deleted", note: proj.name, date: (new Date()).toISOString().slice(0, 10) }, ...prev]);
                 }
-                showAlert("🗑️ Project archived", "error");
+                showAlert("🗑️ Project deleted successfully", "success");
             }
         } catch (error) {
             console.error('Error deleting project:', error);
-            showAlert(`Failed to archive project: ${error.message}`, "error");
+            showAlert(`Failed to delete project: ${error.message}`, "error");
         }
     };
 
@@ -583,33 +601,257 @@ export default function NGODashboard() {
 
     function EditProjectModal({ project, onClose }) {
         if (!project) return null;
-        const [form, setForm] = useState({
-            name: project.name, duration: project.duration || 12, fundsDisplay: project.fundsDisplay,
-            progress: project.progress, beneficiaries: project.beneficiaries, location: project.location, description: project.description
-        });
+        
+        const originalForm = {
+            name: project.name || "", 
+            duration: project.duration || 12, 
+            fundsDisplay: project.fundsDisplay || "",
+            beneficiaries: project.beneficiaries || 0, 
+            location: project.location || "", 
+            description: project.description || ""
+        };
+
+        const [form, setForm] = useState(originalForm);
+        const [errors, setErrors] = useState({});
+
+        // Check if there are any changes
+        const hasChanges = 
+            form.name !== originalForm.name ||
+            form.duration !== originalForm.duration ||
+            form.fundsDisplay !== originalForm.fundsDisplay ||
+            form.beneficiaries !== originalForm.beneficiaries ||
+            form.location !== originalForm.location ||
+            form.description !== originalForm.description;
+
+        // Validate only changed fields
+        const validateForm = () => {
+            const newErrors = {};
+            
+            // Only validate fields that have changed
+            if (form.name !== originalForm.name) {
+                if (!form.name.trim()) {
+                    newErrors.name = "Project name is required";
+                }
+            }
+            
+            if (form.duration !== originalForm.duration) {
+                if (!form.duration || form.duration < 1) {
+                    newErrors.duration = "Duration must be at least 1 month";
+                }
+            }
+            
+            if (form.fundsDisplay !== originalForm.fundsDisplay) {
+                if (!form.fundsDisplay.trim()) {
+                    newErrors.fundsDisplay = "Project funds are required";
+                } else {
+                    const fundsValue = parseInt(form.fundsDisplay.replace(/\D/g, ''), 10);
+                    if (isNaN(fundsValue) || fundsValue <= 0) {
+                        newErrors.fundsDisplay = "Please enter a valid amount";
+                    }
+                }
+            }
+            
+            if (form.location !== originalForm.location) {
+                if (!form.location.trim()) {
+                    newErrors.location = "Project location is required";
+                }
+            }
+            
+            if (form.description !== originalForm.description) {
+                if (!form.description.trim()) {
+                    newErrors.description = "Project description is required";
+                }
+            }
+            
+            if (form.beneficiaries !== originalForm.beneficiaries && form.beneficiaries < 0) {
+                newErrors.beneficiaries = "Beneficiaries cannot be negative";
+            }
+            
+            setErrors(newErrors);
+            return Object.keys(newErrors).length === 0;
+        };
+
+        const handleSubmit = () => {
+            if (!hasChanges) {
+                showAlert("No changes to save", "info");
+                return;
+            }
+
+            if (validateForm()) {
+                const fundsValue = parseInt(form.fundsDisplay.replace(/\D/g, ''), 10) || project.funds || 0;
+                updateProject(project.id, { 
+                    ...form, 
+                    funds: fundsValue, 
+                    fundsDisplay: form.fundsDisplay, 
+                    duration: form.duration || 12
+                });
+                setErrors({});
+                onClose();
+            } else {
+                showAlert("Please fix the errors in the changed fields", "error");
+            }
+        };
+
+        // Form is valid if there are changes and no validation errors
+        const isFormValid = hasChanges && Object.keys(errors).length === 0;
 
         return (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
                 <div className="absolute inset-0 bg-black/30" onClick={onClose} />
-                <div className="relative bg-white rounded-xl shadow-lg w-full max-w-2xl p-6 z-10">
-                    <div className="flex items-center justify-between">
-                        <h3 className="text-lg font-semibold">Edit Project</h3>
-                        <button onClick={onClose}><X /></button>
+                <div className="relative bg-white rounded-xl shadow-lg w-full max-w-2xl p-6 z-10 max-h-[90vh] overflow-y-auto">
+                    <div className="flex items-center justify-between mb-6">
+                        <div>
+                            <h3 className="text-xl font-semibold text-slate-800">Edit Project</h3>
+                            <p className="text-sm text-slate-500 mt-1">Update project details</p>
+                        </div>
+                        <button 
+                            onClick={onClose}
+                            className="p-2 rounded-full hover:bg-slate-100 transition-colors"
+                        >
+                            <X size={20} className="text-slate-500" />
+                        </button>
                     </div>
 
-                    <div className="mt-4 grid grid-cols-2 gap-4">
-                        <input value={form.name} onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))} className="col-span-2 border p-2 rounded" />
-                        <input type="number" value={form.duration} onChange={(e) => setForm(f => ({ ...f, duration: Number(e.target.value) || 12 }))} placeholder="Duration (months)" className="border p-2 rounded" />
-                        <input value={form.fundsDisplay} onChange={(e) => setForm(f => ({ ...f, fundsDisplay: e.target.value }))} className="border p-2 rounded" />
-                        <input value={String(form.progress)} onChange={(e) => setForm(f => ({ ...f, progress: Math.max(0, Math.min(100, Number(e.target.value || 0))) }))} type="number" min={0} max={100} className="border p-2 rounded" />
-                        <input value={String(form.beneficiaries)} onChange={(e) => setForm(f => ({ ...f, beneficiaries: Number(e.target.value || 0) }))} type="number" className="border p-2 rounded" />
-                        <input value={form.location} onChange={(e) => setForm(f => ({ ...f, location: e.target.value }))} className="border p-2 rounded col-span-2" />
-                        <textarea value={form.description} onChange={(e) => setForm(f => ({ ...f, description: e.target.value }))} className="col-span-2 border p-2 rounded" />
+                    <div className="space-y-5">
+                        {/* Project Name */}
+                        <div className="col-span-2">
+                            <label className="block text-sm font-medium text-slate-700 mb-2">
+                                Project Name <span className="text-red-500">*</span>
+                            </label>
+                            <input 
+                                type="text"
+                                value={form.name} 
+                                onChange={(e) => {
+                                    setForm(f => ({ ...f, name: e.target.value }));
+                                    if (errors.name) setErrors({ ...errors, name: null });
+                                }}
+                                placeholder="e.g., Digital Learning Labs 2.0"
+                                className={`w-full border ${errors.name ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
+                            />
+                            {errors.name && <p className="text-xs text-red-500 mt-1">{errors.name}</p>}
+                            <p className="text-xs text-slate-400 mt-1">Enter a descriptive name for your project</p>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4">
+                            {/* Duration */}
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-2">
+                                    Project Duration (Months) <span className="text-red-500">*</span>
+                                </label>
+                                <input 
+                                    type="number" 
+                                    min="1"
+                                    value={form.duration} 
+                                    onChange={(e) => {
+                                        const val = Number(e.target.value) || 0;
+                                        setForm(f => ({ ...f, duration: val }));
+                                        if (errors.duration) setErrors({ ...errors, duration: null });
+                                    }}
+                                    placeholder="12"
+                                    className={`w-full border ${errors.duration ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
+                                />
+                                {errors.duration && <p className="text-xs text-red-500 mt-1">{errors.duration}</p>}
+                                <p className="text-xs text-slate-400 mt-1">How long will this project run?</p>
+                            </div>
+
+                            {/* Funds */}
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-2">
+                                    Project Funds (₹) <span className="text-red-500">*</span>
+                                </label>
+                                <input 
+                                    type="text"
+                                    value={form.fundsDisplay} 
+                                    onChange={(e) => {
+                                        setForm(f => ({ ...f, fundsDisplay: e.target.value }));
+                                        if (errors.fundsDisplay) setErrors({ ...errors, fundsDisplay: null });
+                                    }}
+                                    placeholder="e.g., 32,00,000"
+                                    className={`w-full border ${errors.fundsDisplay ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
+                                />
+                                {errors.fundsDisplay && <p className="text-xs text-red-500 mt-1">{errors.fundsDisplay}</p>}
+                                <p className="text-xs text-slate-400 mt-1">Total budget required for this project</p>
+                            </div>
+                        </div>
+
+                        {/* Beneficiaries */}
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-2">
+                                Expected Beneficiaries
+                            </label>
+                            <input 
+                                type="number" 
+                                min="0"
+                                value={form.beneficiaries} 
+                                onChange={(e) => {
+                                    const val = Math.max(0, Number(e.target.value || 0));
+                                    setForm(f => ({ ...f, beneficiaries: val }));
+                                    if (errors.beneficiaries) setErrors({ ...errors, beneficiaries: null });
+                                }}
+                                placeholder="0"
+                                className={`w-full border ${errors.beneficiaries ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
+                            />
+                            {errors.beneficiaries && <p className="text-xs text-red-500 mt-1">{errors.beneficiaries}</p>}
+                            <p className="text-xs text-slate-400 mt-1">Number of people who will benefit from this project</p>
+                        </div>
+
+                        {/* Location */}
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-2">
+                                Project Location <span className="text-red-500">*</span>
+                            </label>
+                            <input 
+                                type="text"
+                                value={form.location} 
+                                onChange={(e) => {
+                                    setForm(f => ({ ...f, location: e.target.value }));
+                                    if (errors.location) setErrors({ ...errors, location: null });
+                                }}
+                                placeholder="e.g., Mumbai, Maharashtra"
+                                className={`w-full border ${errors.location ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
+                            />
+                            {errors.location && <p className="text-xs text-red-500 mt-1">{errors.location}</p>}
+                            <p className="text-xs text-slate-400 mt-1">Where will this project be implemented?</p>
+                        </div>
+
+                        {/* Description */}
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-2">
+                                Project Description <span className="text-red-500">*</span>
+                            </label>
+                            <textarea 
+                                value={form.description} 
+                                onChange={(e) => {
+                                    setForm(f => ({ ...f, description: e.target.value }));
+                                    if (errors.description) setErrors({ ...errors, description: null });
+                                }}
+                                placeholder="Describe your project goals, objectives, and expected impact..."
+                                rows={4}
+                                className={`w-full border ${errors.description ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none`}
+                            />
+                            {errors.description && <p className="text-xs text-red-500 mt-1">{errors.description}</p>}
+                            <p className="text-xs text-slate-400 mt-1">Provide a detailed description of your project</p>
+                        </div>
                     </div>
 
-                    <div className="mt-4 flex justify-end gap-2">
-                        <button onClick={onClose} className="px-4 py-2 rounded-md bg-slate-100">Cancel</button>
-                        <button onClick={() => { updateProject(project.id, { ...form, funds: parseInt(form.fundsDisplay.replace(/\D/g, ''), 10) || project.funds }); }} className="px-4 py-2 rounded-md bg-indigo-600 text-white">Save</button>
+                    <div className="mt-6 flex justify-end gap-3 pt-4 border-t border-slate-200">
+                        <button 
+                            onClick={onClose} 
+                            className="px-5 py-2.5 rounded-lg bg-slate-100 text-slate-700 font-medium hover:bg-slate-200 transition-colors"
+                        >
+                            Cancel
+                        </button>
+                        <button 
+                            onClick={handleSubmit}
+                            disabled={!isFormValid}
+                            className={`px-5 py-2.5 rounded-lg font-medium transition-colors ${
+                                isFormValid 
+                                    ? 'bg-indigo-600 text-white hover:bg-indigo-700' 
+                                    : 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                            }`}
+                        >
+                            Save Changes
+                        </button>
                     </div>
                 </div>
             </div>
@@ -617,30 +859,231 @@ export default function NGODashboard() {
     }
 
     function AddProjectModal({ open, onClose }) {
-        const [form, setForm] = useState({ name: "", duration: 12, fundsDisplay: "", progress: 0, beneficiaries: 0, location: "", description: "" });
+        const [form, setForm] = useState({ name: "", duration: 12, fundsDisplay: "", beneficiaries: 0, location: "", description: "" });
+        const [errors, setErrors] = useState({});
+        
         if (!open) return null;
+
+        const validateForm = () => {
+            const newErrors = {};
+            
+            if (!form.name.trim()) {
+                newErrors.name = "Project name is required";
+            }
+            
+            if (!form.duration || form.duration < 1) {
+                newErrors.duration = "Duration must be at least 1 month";
+            }
+            
+            if (!form.fundsDisplay.trim()) {
+                newErrors.fundsDisplay = "Project funds are required";
+            } else {
+                const fundsValue = parseInt(form.fundsDisplay.replace(/\D/g, ''), 10);
+                if (isNaN(fundsValue) || fundsValue <= 0) {
+                    newErrors.fundsDisplay = "Please enter a valid amount";
+                }
+            }
+            
+            if (!form.location.trim()) {
+                newErrors.location = "Project location is required";
+            }
+            
+            if (!form.description.trim()) {
+                newErrors.description = "Project description is required";
+            }
+            
+            if (form.beneficiaries < 0) {
+                newErrors.beneficiaries = "Beneficiaries cannot be negative";
+            }
+            
+            setErrors(newErrors);
+            return Object.keys(newErrors).length === 0;
+        };
+
+        const handleSubmit = () => {
+            if (validateForm()) {
+                const fundsValue = parseInt(form.fundsDisplay.replace(/\D/g, ''), 10) || 0;
+                addProject({ 
+                    ...form, 
+                    funds: fundsValue, 
+                    fundsDisplay: form.fundsDisplay, 
+                    duration: form.duration || 12,
+                    progress: 0 // Default progress to 0 for new projects
+                });
+                // Reset form
+                setForm({ name: "", duration: 12, fundsDisplay: "", beneficiaries: 0, location: "", description: "" });
+                setErrors({});
+                onClose();
+            } else {
+                showAlert("Please fill in all required fields correctly", "error");
+            }
+        };
+
+        const isFormValid = form.name.trim() && 
+                           form.duration >= 1 && 
+                           form.fundsDisplay.trim() && 
+                           parseInt(form.fundsDisplay.replace(/\D/g, ''), 10) > 0 &&
+                           form.location.trim() && 
+                           form.description.trim() &&
+                           form.beneficiaries >= 0;
+
         return (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
                 <div className="absolute inset-0 bg-black/30" onClick={onClose} />
-                <div className="relative bg-white rounded-xl shadow-lg w-full max-w-2xl p-6 z-10">
-                    <div className="flex items-center justify-between">
-                        <h3 className="text-lg font-semibold">Add Project</h3>
-                        <button onClick={onClose}><X /></button>
+                <div className="relative bg-white rounded-xl shadow-lg w-full max-w-2xl p-6 z-10 max-h-[90vh] overflow-y-auto">
+                    <div className="flex items-center justify-between mb-6">
+                        <div>
+                            <h3 className="text-xl font-semibold text-slate-800">Add New Project</h3>
+                            <p className="text-sm text-slate-500 mt-1">Fill in the details to create a new project</p>
+                        </div>
+                        <button 
+                            onClick={onClose}
+                            className="p-2 rounded-full hover:bg-slate-100 transition-colors"
+                        >
+                            <X size={20} className="text-slate-500" />
+                        </button>
                     </div>
 
-                    <div className="mt-4 grid grid-cols-2 gap-4">
-                        <input placeholder="Project name" value={form.name} onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))} className="col-span-2 border p-2 rounded" />
-                        <input type="number" placeholder="Duration (months)" value={form.duration} onChange={(e) => setForm(f => ({ ...f, duration: Number(e.target.value) || 12 }))} className="border p-2 rounded" />
-                        <input placeholder="Funds (₹)" value={form.fundsDisplay} onChange={(e) => setForm(f => ({ ...f, fundsDisplay: e.target.value }))} className="border p-2 rounded" />
-                        <input placeholder="Progress (%)" type="number" min={0} max={100} value={form.progress} onChange={(e) => setForm(f => ({ ...f, progress: Number(e.target.value || 0) }))} className="border p-2 rounded" />
-                        <input placeholder="Beneficiaries" type="number" value={form.beneficiaries} onChange={(e) => setForm(f => ({ ...f, beneficiaries: Number(e.target.value || 0) }))} className="border p-2 rounded" />
-                        <input placeholder="Location" value={form.location} onChange={(e) => setForm(f => ({ ...f, location: e.target.value }))} className="border p-2 rounded col-span-2" />
-                        <textarea placeholder="Short description" value={form.description} onChange={(e) => setForm(f => ({ ...f, description: e.target.value }))} className="col-span-2 border p-2 rounded" />
+                    <div className="space-y-5">
+                        {/* Project Name */}
+                        <div className="col-span-2">
+                            <label className="block text-sm font-medium text-slate-700 mb-2">
+                                Project Name <span className="text-red-500">*</span>
+                            </label>
+                            <input 
+                                type="text"
+                                value={form.name} 
+                                onChange={(e) => {
+                                    setForm(f => ({ ...f, name: e.target.value }));
+                                    if (errors.name) setErrors({ ...errors, name: null });
+                                }}
+                                placeholder="e.g., Digital Learning Labs 2.0"
+                                className={`w-full border ${errors.name ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
+                            />
+                            {errors.name && <p className="text-xs text-red-500 mt-1">{errors.name}</p>}
+                            <p className="text-xs text-slate-400 mt-1">Enter a descriptive name for your project</p>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4">
+                            {/* Duration */}
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-2">
+                                    Project Duration (Months) <span className="text-red-500">*</span>
+                                </label>
+                                <input 
+                                    type="number" 
+                                    min="1"
+                                    value={form.duration} 
+                                    onChange={(e) => {
+                                        const val = Number(e.target.value) || 0;
+                                        setForm(f => ({ ...f, duration: val }));
+                                        if (errors.duration) setErrors({ ...errors, duration: null });
+                                    }}
+                                    placeholder="12"
+                                    className={`w-full border ${errors.duration ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
+                                />
+                                {errors.duration && <p className="text-xs text-red-500 mt-1">{errors.duration}</p>}
+                                <p className="text-xs text-slate-400 mt-1">How long will this project run?</p>
+                            </div>
+
+                            {/* Funds */}
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-2">
+                                    Project Funds (₹) <span className="text-red-500">*</span>
+                                </label>
+                                <input 
+                                    type="text"
+                                    value={form.fundsDisplay} 
+                                    onChange={(e) => {
+                                        setForm(f => ({ ...f, fundsDisplay: e.target.value }));
+                                        if (errors.fundsDisplay) setErrors({ ...errors, fundsDisplay: null });
+                                    }}
+                                    placeholder="e.g., 32,00,000"
+                                    className={`w-full border ${errors.fundsDisplay ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
+                                />
+                                {errors.fundsDisplay && <p className="text-xs text-red-500 mt-1">{errors.fundsDisplay}</p>}
+                                <p className="text-xs text-slate-400 mt-1">Total budget required for this project</p>
+                            </div>
+                        </div>
+
+                        {/* Beneficiaries */}
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-2">
+                                Expected Beneficiaries
+                            </label>
+                            <input 
+                                type="number" 
+                                min="0"
+                                value={form.beneficiaries} 
+                                onChange={(e) => {
+                                    const val = Math.max(0, Number(e.target.value || 0));
+                                    setForm(f => ({ ...f, beneficiaries: val }));
+                                    if (errors.beneficiaries) setErrors({ ...errors, beneficiaries: null });
+                                }}
+                                placeholder="0"
+                                className={`w-full border ${errors.beneficiaries ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
+                            />
+                            {errors.beneficiaries && <p className="text-xs text-red-500 mt-1">{errors.beneficiaries}</p>}
+                            <p className="text-xs text-slate-400 mt-1">Number of people who will benefit from this project</p>
+                        </div>
+
+                        {/* Location */}
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-2">
+                                Project Location <span className="text-red-500">*</span>
+                            </label>
+                            <input 
+                                type="text"
+                                value={form.location} 
+                                onChange={(e) => {
+                                    setForm(f => ({ ...f, location: e.target.value }));
+                                    if (errors.location) setErrors({ ...errors, location: null });
+                                }}
+                                placeholder="e.g., Mumbai, Maharashtra"
+                                className={`w-full border ${errors.location ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
+                            />
+                            {errors.location && <p className="text-xs text-red-500 mt-1">{errors.location}</p>}
+                            <p className="text-xs text-slate-400 mt-1">Where will this project be implemented?</p>
+                        </div>
+
+                        {/* Description */}
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-2">
+                                Project Description <span className="text-red-500">*</span>
+                            </label>
+                            <textarea 
+                                value={form.description} 
+                                onChange={(e) => {
+                                    setForm(f => ({ ...f, description: e.target.value }));
+                                    if (errors.description) setErrors({ ...errors, description: null });
+                                }}
+                                placeholder="Describe your project goals, objectives, and expected impact..."
+                                rows={4}
+                                className={`w-full border ${errors.description ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none`}
+                            />
+                            {errors.description && <p className="text-xs text-red-500 mt-1">{errors.description}</p>}
+                            <p className="text-xs text-slate-400 mt-1">Provide a detailed description of your project</p>
+                        </div>
                     </div>
 
-                    <div className="mt-4 flex justify-end gap-2">
-                        <button onClick={onClose} className="px-4 py-2 rounded-md bg-slate-100">Cancel</button>
-                        <button onClick={() => addProject({ ...form, funds: parseInt(form.fundsDisplay.replace(/\D/g, ''), 10) || 0, fundsDisplay: form.fundsDisplay, duration: form.duration || 12 })} className="px-4 py-2 rounded-md bg-green-600 text-white">Add</button>
+                    <div className="mt-6 flex justify-end gap-3 pt-4 border-t border-slate-200">
+                        <button 
+                            onClick={onClose} 
+                            className="px-5 py-2.5 rounded-lg bg-slate-100 text-slate-700 font-medium hover:bg-slate-200 transition-colors"
+                        >
+                            Cancel
+                        </button>
+                        <button 
+                            onClick={handleSubmit}
+                            disabled={!isFormValid}
+                            className={`px-5 py-2.5 rounded-lg font-medium transition-colors ${
+                                isFormValid 
+                                    ? 'bg-indigo-600 text-white hover:bg-indigo-700' 
+                                    : 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                            }`}
+                        >
+                            Add Project
+                        </button>
                     </div>
                 </div>
             </div>
@@ -654,11 +1097,38 @@ export default function NGODashboard() {
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
                 <div className="absolute inset-0 bg-black/30" onClick={onCancel} />
                 <div className="relative bg-white rounded-xl shadow-lg w-full max-w-md p-6 z-10">
-                    <h3 className="text-lg font-semibold">Delete project?</h3>
-                    <p className="text-sm text-slate-500 mt-2">This will permanently remove <span className="font-medium">{project?.name}</span>. This action cannot be undone.</p>
-                    <div className="mt-4 flex justify-end gap-2">
-                        <button onClick={onCancel} className="px-4 py-2 rounded-md bg-slate-100">Cancel</button>
-                        <button onClick={() => onConfirm(projectId)} className="px-4 py-2 rounded-md bg-red-600 text-white">Delete</button>
+                    <div className="flex items-center gap-3 mb-4">
+                        <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center">
+                            <Trash2 size={24} className="text-red-600" />
+                        </div>
+                        <div>
+                            <h3 className="text-lg font-semibold text-slate-800">Delete Project?</h3>
+                            <p className="text-sm text-slate-500">This action cannot be undone</p>
+                        </div>
+                    </div>
+                    <p className="text-sm text-slate-600 mb-1">
+                        You are about to permanently delete:
+                    </p>
+                    <p className="text-sm font-medium text-slate-800 mb-4">
+                        "{project?.name}"
+                    </p>
+                    <p className="text-xs text-slate-500 mb-6">
+                        This will completely remove the project from your dashboard. All project data will be lost and cannot be recovered.
+                    </p>
+                    <div className="flex justify-end gap-3">
+                        <button 
+                            onClick={onCancel} 
+                            className="px-5 py-2.5 rounded-lg bg-slate-100 text-slate-700 font-medium hover:bg-slate-200 transition-colors"
+                        >
+                            Cancel
+                        </button>
+                        <button 
+                            onClick={() => onConfirm(projectId)} 
+                            className="px-5 py-2.5 rounded-lg bg-red-600 text-white font-medium hover:bg-red-700 transition-colors flex items-center gap-2"
+                        >
+                            <Trash2 size={16} />
+                            Delete Permanently
+                        </button>
                     </div>
                 </div>
             </div>
@@ -991,7 +1461,13 @@ export default function NGODashboard() {
                     })}
 
                     <div className="mt-4 border-t pt-4">
-                        <button className="w-full flex items-center gap-3 p-3 rounded-lg text-red-600 hover:bg-red-50"><LogOut size={18} /><span className="font-medium">Logout</span></button>
+                        <button 
+                            onClick={handleLogout}
+                            className="w-full flex items-center gap-3 p-3 rounded-lg text-red-600 hover:bg-red-50"
+                        >
+                            <LogOut size={18} />
+                            <span className="font-medium">Logout</span>
+                        </button>
                     </div>
                 </nav>
             </aside>
@@ -1182,19 +1658,6 @@ export default function NGODashboard() {
                                             <div className="bg-violet-200 p-2 rounded-lg">
                                                 <FolderKanban size={28} />
                                             </div>
-                                <div
-                                    role="button"
-                                    tabIndex={0}
-                                    onClick={() => setActiveNav("projects")}
-                                    className="bg-gradient-to-br from-violet-50 to-purple-100 rounded-2xl shadow-sm p-5 border hover:border-violet-300 hover:shadow-lg hover:scale-105 transform-gpu transition-all duration-300 cursor-pointer"
-                                >
-                                    <p className="text-sm text-slate-500">Active Projects</p>
-                                    <div className="flex justify-between items-center mt-1">
-                                        <h2 className="text-3xl font-extrabold text-violet-700">
-                                            {dashboardStats?.projectStats?.active || projects.filter((p) => p.status === "active").length}
-                                        </h2>
-                                        <div className="bg-violet-200 p-2 rounded-lg">
-                                            <FolderKanban size={28} />
                                         </div>
                                     </div>
 
@@ -1224,96 +1687,305 @@ export default function NGODashboard() {
                                         <p className="text-sm text-slate-500">Pending Requests</p>
                                         <div className="flex justify-between items-center mt-1">
                                             <h2 className="text-3xl font-extrabold text-violet-700">
-                                                {csrRequests.length}
+                                                {dashboardStats?.pendingRequests || csrRequests.filter(r => r.status === 'pending').length}
                                             </h2>
                                             <div className="bg-violet-200 p-2 rounded-lg">
                                                 <TrendingUp size={28} />
                                             </div>
-                                <div
-                                    role="button"
-                                    tabIndex={0}
-                                    onClick={() => setActiveNav("connections")}
-                                    className="bg-gradient-to-br from-violet-50 to-purple-100 rounded-2xl shadow-sm p-5 border hover:border-violet-300 hover:shadow-lg hover:scale-105 transform-gpu transition-all duration-300 cursor-pointer"
-                                >
-                                    <p className="text-sm text-slate-500">Pending Requests</p>
-                                    <div className="flex justify-between items-center mt-1">
-                                        <h2 className="text-3xl font-extrabold text-violet-700">
-                                            {dashboardStats?.pendingRequests || csrRequests.filter(r => r.status === 'pending').length}
-                                        </h2>
-                                        <div className="bg-violet-200 p-2 rounded-lg">
-                                            <TrendingUp size={28} />
                                         </div>
                                     </div>
                                 </section>
 
-                                {/* Two columns: CSR Requests + Fund Chart */}
-                                <section className="grid md:grid-cols-2 gap-6 mt-6">
-                                    <div className="bg-white rounded-2xl shadow-lg p-6 border border-indigo-50 hover:shadow-xl transition-all duration-200">
-                                        <h2 className="text-xl font-semibold mb-4">Pending CSR Requests</h2>
-                                        {csrRequests.length === 0 ? (
-                                            <p className="text-slate-500">No pending requests 🎉</p>
-                                        ) : (
-                                            csrRequests.map((req) => (
+                                {/* Requests Monitor Section */}
+                                <section className="grid gap-6 lg:grid-cols-[2fr,1fr] mt-6">
+                                    <div className="p-6 bg-white border shadow-sm border-indigo-50 rounded-2xl">
+                                        <div className="flex items-center justify-between">
+                                            <div>
+                                                <h2 className="text-lg font-semibold text-slate-800">
+                                                    Requests Monitor
+                                                </h2>
+                                                <p className="text-sm text-slate-500">
+                                                    Track incoming CSR requests and responses
+                                                </p>
+                                            </div>
+                                            <Send size={18} className="text-indigo-500" />
+                                        </div>
+
+                                        <div className="grid grid-cols-1 gap-3 mt-6 sm:grid-cols-3">
+                                            {[
+                                                {
+                                                    label: "Received",
+                                                    value: csrRequests.length,
+                                                    tone: "bg-indigo-50 text-indigo-600",
+                                                },
+                                                {
+                                                    label: "Pending",
+                                                    value: csrRequests.filter(r => r.status === 'pending').length,
+                                                    tone: "bg-amber-50 text-amber-600",
+                                                },
+                                                {
+                                                    label: "Active Partnerships",
+                                                    value: acceptedConnections.length,
+                                                    tone: "bg-emerald-50 text-emerald-600",
+                                                },
+                                            ].map((metric) => (
                                                 <div
-                                                    key={req.id}
-                                                    className="border-b py-4 flex justify-between items-center"
+                                                    key={metric.label}
+                                                    className={`rounded-xl px-4 py-3 text-sm font-medium ${metric.tone}`}
                                                 >
-                                                    <div>
-                                                        <h3 className="font-semibold">{req.company}</h3>
-                                                        <p className="text-sm text-slate-600">
-                                                            {req.project} —{" "}
-                                                            <span className="text-purple-600">{req.budget}</span>
-                                                        </p>
-                                                        <p className="text-xs text-slate-500 italic">{req.message}</p>
+                                                    <div className="text-xs uppercase tracking-wide text-slate-500">
+                                                        {metric.label}
                                                     </div>
-                                                    <div className="flex gap-2">
-                                                        <button
-                                                            onClick={() => acceptConnectionRequest(req.id)}
-                                                            className="px-3 py-1 rounded-lg bg-green-600 text-white hover:bg-green-700 transition-all"
-                                                        >
-                                                            Accept
-                                                        </button>
-                                                        <button
-                                                            onClick={() => declineConnectionRequest(req.id)}
-                                                            className="px-3 py-1 rounded-lg bg-red-600 text-white"
-                                                        >
-                                                            Decline
-                                                        </button>
+                                                    <div className="mt-2 text-2xl">
+                                                        {metric.value.toLocaleString("en-IN")}
                                                     </div>
                                                 </div>
-                                            ))
+                                            ))}
+                                        </div>
+
+                                        <div className="mt-6">
+                                            <div className="flex items-center justify-between mb-2">
+                                                <h3 className="text-sm font-semibold text-slate-700">
+                                                    Recent Requests
+                                                </h3>
+                                                <span className="text-xs text-slate-400">
+                                                    Showing {Math.min(csrRequests.length, 4)} of {csrRequests.length}
+                                                </span>
+                                            </div>
+                                            {csrRequests.length === 0 ? (
+                                                <div className="p-4 text-sm border border-dashed rounded-lg text-slate-500">
+                                                    No requests received yet. Your projects will appear here when corporates send CSR requests.
+                                                </div>
+                                            ) : (
+                                                <ul className="space-y-3">
+                                                    {csrRequests.slice(0, 4).map((item) => (
+                                                        <li
+                                                            key={item.id}
+                                                            className="flex items-start justify-between gap-3 p-3 border rounded-xl border-slate-100 bg-slate-50/60"
+                                                        >
+                                                            <div className="flex-1">
+                                                                <div className="text-sm font-semibold text-slate-700">
+                                                                    {item.company}
+                                                                </div>
+                                                                <div className="text-xs text-slate-500 mt-1">
+                                                                    {item.project} • {item.budget}
+                                                                </div>
+                                                                {item.message && (
+                                                                    <div className="text-xs text-slate-400 mt-1 italic line-clamp-1">
+                                                                        {item.message}
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                            <span
+                                                                className={`text-xs px-3 py-1 rounded-full font-medium shrink-0 ${
+                                                                    item.status === "accepted" || item.status === "Accepted"
+                                                                        ? "bg-emerald-100 text-emerald-600"
+                                                                        : item.status === "rejected" || item.status === "Rejected"
+                                                                        ? "bg-rose-100 text-rose-600"
+                                                                        : "bg-amber-100 text-amber-600"
+                                                                }`}
+                                                            >
+                                                                {item.status === "pending" ? "Pending" : item.status}
+                                                            </span>
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            )}
+                                        </div>
+
+                                        {csrRequests.filter(r => r.status === 'pending').length > 0 && (
+                                            <div className="mt-6">
+                                                <h3 className="text-sm font-semibold text-slate-700 mb-2">
+                                                    Pending Requests
+                                                </h3>
+                                                <div className="grid gap-3 sm:grid-cols-2">
+                                                    {csrRequests.filter(r => r.status === 'pending').slice(0, 2).map((item) => (
+                                                        <div
+                                                            key={item.id}
+                                                            className="p-3 border rounded-xl border-amber-100 bg-amber-50/60"
+                                                        >
+                                                            <div className="text-sm font-medium text-slate-700">
+                                                                {item.company}
+                                                            </div>
+                                                            <div className="mt-1 text-xs text-slate-500 line-clamp-2">
+                                                                {item.project}
+                                                            </div>
+                                                            <div className="mt-2 flex gap-2">
+                                                                <button
+                                                                    onClick={() => acceptConnectionRequest(item.id)}
+                                                                    className="px-2 py-1 text-xs rounded-md bg-green-600 text-white hover:bg-green-700"
+                                                                >
+                                                                    Accept
+                                                                </button>
+                                                                <button
+                                                                    onClick={() => declineConnectionRequest(item.id)}
+                                                                    className="px-2 py-1 text-xs rounded-md bg-red-50 text-red-600 hover:bg-red-100"
+                                                                >
+                                                                    Decline
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
                                         )}
                                     </div>
 
-                                    <div className="bg-white rounded-2xl shadow-lg p-6 border border-indigo-50 hover:shadow-xl transition-all duration-200">
-                                        <h2 className="text-xl font-semibold mb-4">Fund Distribution</h2>
-                                        <div className="flex justify-center items-center" style={{ height: 250 }}>
-                                            <ResponsiveContainer width="90%" height="100%">
-                                                <PieChart>
-                                                    <Pie
-                                                        data={fundData}
-                                                        dataKey="value"
-                                                        nameKey="name"
-                                                        cx="50%"
-                                                        cy="50%"
-                                                        outerRadius={90}
-                                                        label
+                                    <div className="p-6 bg-white border shadow-sm border-indigo-50 rounded-2xl">
+                                        <div className="flex items-center justify-between mb-4">
+                                            <div>
+                                                <h2 className="text-lg font-semibold text-slate-800">
+                                                    Fund Distribution
+                                                </h2>
+                                                <p className="text-sm text-slate-500">
+                                                    Distribution across partnerships
+                                                </p>
+                                            </div>
+                                            <BarChart2 size={20} className="text-indigo-500" />
+                                        </div>
+                                        {fundData.length === 0 ? (
+                                            <div className="grid h-64 border border-dashed place-items-center text-slate-500 rounded-xl">
+                                                Not enough data yet
+                                            </div>
+                                        ) : (
+                                            <div className="h-64">
+                                                <ResponsiveContainer width="100%" height="100%">
+                                                    <PieChart>
+                                                        <Pie
+                                                            data={fundData}
+                                                            dataKey="value"
+                                                            nameKey="name"
+                                                            cx="50%"
+                                                            cy="50%"
+                                                            outerRadius={90}
+                                                            innerRadius={50}
+                                                            paddingAngle={4}
+                                                            label={({ name, value }) =>
+                                                                `${name} (₹${(value / 100000).toFixed(1)}L)`
+                                                            }
+                                                        >
+                                                            {fundData.map((entry, index) => (
+                                                                <Cell key={index} fill={COLORS[index % COLORS.length]} />
+                                                            ))}
+                                                        </Pie>
+                                                        <Tooltip formatter={(value) => `₹${value.toLocaleString('en-IN')}`} />
+                                                    </PieChart>
+                                                </ResponsiveContainer>
+                                            </div>
+                                        )}
+                                    </div>
+                                </section>
+
+                                {/* Active Projects and Recent Activity */}
+                                <section className="grid gap-6 lg:grid-cols-2 mt-6">
+                                    <div className="p-6 bg-white border shadow-sm border-indigo-50 rounded-2xl">
+                                        <div className="flex items-center justify-between mb-4">
+                                            <div>
+                                                <h2 className="text-lg font-semibold text-slate-800">
+                                                    Active Projects
+                                                </h2>
+                                                <p className="text-sm text-slate-500">
+                                                    Projects currently in progress
+                                                </p>
+                                            </div>
+                                            <FolderKanban size={20} className="text-indigo-500" />
+                                        </div>
+                                        {projects.filter(p => p.status === "active").length === 0 ? (
+                                            <div className="p-4 text-sm text-slate-500 border border-dashed rounded-lg">
+                                                No active projects to display yet.
+                                            </div>
+                                        ) : (
+                                            <ul className="space-y-4">
+                                                {projects.filter(p => p.status === "active").slice(0, 4).map((project) => (
+                                                    <li
+                                                        key={project.id}
+                                                        className="p-4 border rounded-xl border-slate-100 bg-slate-50/60"
                                                     >
-                                                        {fundData.map((entry, index) => (
-                                                            <Cell key={index} fill={COLORS[index % COLORS.length]} />
-                                                        ))}
-                                                    </Pie>
-                                                    <Tooltip />
-                                                </PieChart>
-                                            </ResponsiveContainer>
+                                                        <div className="flex items-start justify-between gap-3">
+                                                            <div className="flex-1">
+                                                                <div className="text-sm font-semibold text-slate-700">
+                                                                    {project.name}
+                                                                </div>
+                                                                <div className="text-xs text-slate-500 mt-1">
+                                                                    {project.location} • {project.duration} months
+                                                                </div>
+                                                            </div>
+                                                            <div className="text-xs text-slate-500 text-right">
+                                                                {project.fundsDisplay}
+                                                            </div>
+                                                        </div>
+                                                        <div className="mt-3">
+                                                            <ProgressBar value={project.progress} />
+                                                            <div className="flex justify-between mt-2 text-xs text-slate-500">
+                                                                <span>{project.status || "In progress"}</span>
+                                                                <span>{Math.round(project.progress || 0)}%</span>
+                                                            </div>
+                                                        </div>
+                                                        <div className="mt-3 flex gap-2">
+                                                            <button
+                                                                onClick={() => setViewProject(project)}
+                                                                className="px-3 py-1 rounded-md bg-indigo-600 text-white text-xs flex items-center gap-2 hover:bg-indigo-700"
+                                                            >
+                                                                <Eye size={14} />
+                                                                View
+                                                            </button>
+                                                            <button
+                                                                onClick={() => setEditProject(project)}
+                                                                className="px-3 py-1 rounded-md bg-slate-100 text-xs flex items-center gap-2 hover:bg-slate-200"
+                                                            >
+                                                                <Edit2 size={14} />
+                                                                Edit
+                                                            </button>
+                                                        </div>
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        )}
+                                    </div>
+
+                                    <div className="p-6 bg-white border shadow-sm border-indigo-50 rounded-2xl">
+                                        <div className="flex items-center justify-between mb-4">
+                                            <h2 className="text-lg font-semibold text-slate-800">
+                                                Recent Activity
+                                            </h2>
+                                            <span className="text-xs text-slate-400">
+                                                {connectionHistory.length} updates
+                                            </span>
+                                        </div>
+                                        <div className="relative">
+                                            <div className="absolute top-0 left-5 bottom-4 w-px bg-slate-200" />
+                                            <ul className="space-y-4">
+                                                {connectionHistory.length === 0 ? (
+                                                    <li className="text-sm text-slate-500 pl-8">
+                                                        No recent activity to display.
+                                                    </li>
+                                                ) : (
+                                                    connectionHistory.slice(0, 6).map((item, index) => (
+                                                        <li key={item.id} className="relative flex items-start gap-4">
+                                                            <div className="relative z-10 flex items-center justify-center w-8 h-8 text-sm bg-white border rounded-full shadow-sm border-slate-200">
+                                                                {item.action === "Accepted" ? "✅" : item.action === "Rejected" ? "❌" : item.action.includes("Project") ? "📦" : "📝"}
+                                                            </div>
+                                                            <div className="flex-1">
+                                                                <div className="text-sm text-slate-600">
+                                                                    <span className="font-medium">{item.company}</span> • {item.action}
+                                                                </div>
+                                                                {item.note && (
+                                                                    <div className="text-xs text-slate-400 mt-1">
+                                                                        {item.note}
+                                                                    </div>
+                                                                )}
+                                                                <div className="mt-1 text-xs text-slate-400">
+                                                                    {item.date}
+                                                                </div>
+                                                            </div>
+                                                        </li>
+                                                    ))
+                                                )}
+                                            </ul>
                                         </div>
                                     </div>
                                 </section>
                             </>
-                        )}
-                                </div>
-                            </section>
-                        </>
                         )}
                     </>
                     )}

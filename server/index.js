@@ -206,20 +206,55 @@ const parseFocusAreas = (value) => {
     .filter(Boolean);
 };
 
+// Helper function to get placeholder logo for NGOs without uploaded images
+const getPlaceholderLogo = (ngoId) => {
+  const placeholders = [
+    'https://images.unsplash.com/photo-1552664730-d307ca884978?w=400&h=400&fit=crop',
+    'https://images.unsplash.com/photo-1503676260728-1c00da094a0b?w=400&h=400&fit=crop',
+    'https://images.unsplash.com/photo-1576091160399-112ba8d25d1f?w=400&h=400&fit=crop',
+    'https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?w=400&h=400&fit=crop',
+  ];
+  return placeholders[Number(ngoId) % placeholders.length];
+};
+
 const transformNgoRow = (row) => {
   if (!row) return null;
   const focusAreas = parseFocusAreas(row.project_focus_area || row.focus_area);
   const fundsRequired = Number(row.project_budget_required || row.budget_required || 0);
+  const ngoId = row.ngo_user_id || row.ngo_id || row.user_id;
+
+  // Handle logo path - uploaded images vs placeholder images
+  const logoPath = row.logo_path || row.logo_url || row.logo;
+  let logo;
+  if (logoPath) {
+    // If it's an uploaded file (starts with /uploads), use full server URL
+    if (logoPath.startsWith('/uploads/')) {
+      const serverUrl = process.env.SERVER_URL || 'http://localhost:5000';
+      logo = `${serverUrl}${logoPath}`;
+    } else if (logoPath.startsWith('http')) {
+      // Already a full URL (online hosted image)
+      logo = logoPath;
+    } else if (logoPath.startsWith('/images/')) {
+      // Placeholder image from /images/ folder (relative to frontend)
+      logo = logoPath;
+    } else {
+      // Other relative path
+      logo = logoPath.startsWith('/') ? logoPath : `/${logoPath}`;
+    }
+  } else {
+    // No logo, use placeholder
+    logo = getPlaceholderLogo(ngoId);
+  }
 
   return {
     id: String(row.project_id || row.id),
-    ngoId: row.ngo_user_id || row.ngo_id || row.user_id,
+    ngoId: ngoId,
     name: row.ngo_name || row.organization_name || row.name || "NGO",
     location: row.project_location || row.location || row.region || "N/A",
     tagline: row.tagline || row.ngo_tagline || "",
     focusAreas,
     verified: Boolean(row.verified),
-    logo: row.logo_path || row.logo_url || row.logo || null,
+    logo: logo,
     contact: {
       email: row.contact_email || row.email || "",
       phone: row.contact_phone || row.phone || "",
@@ -853,14 +888,20 @@ app.post("/api/ngo/register", upload.fields([
       [email, hashedPassword, orgName, 'ngo']
     );
 
+    // Handle uploaded NGO image
+    let logoPath = null;
+    if (req.files && req.files.ngoImage && req.files.ngoImage[0]) {
+      logoPath = `/uploads/${req.files.ngoImage[0].filename}`;
+    }
+
     // Insert profile (make sure you have this table)
     await client.query(
       `INSERT INTO ngo_profiles (
         user_id, organization_name, pan_number, phone, description, establishment_year,
-        focus_area, address, city, state, pincode, created_at, updated_at
+        focus_area, address, city, state, pincode, logo_path, created_at, updated_at
       ) VALUES (
         $1, $2, $3, $4, $5, $6,
-        $7, $8, $9, $10, $11, NOW(), NOW()
+        $7, $8, $9, $10, $11, $12, NOW(), NOW()
       )`,
       [
         newUser.rows[0].id,
@@ -873,7 +914,8 @@ app.post("/api/ngo/register", upload.fields([
         address,
         city,
         state,
-        pincode
+        pincode,
+        logoPath
       ]
     );
 
@@ -1515,7 +1557,7 @@ app.put("/api/ngo/projects/:projectId", authenticate, async (req, res) => {
   }
 });
 
-// Delete/Archive NGO Project
+// Delete NGO Project
 app.delete("/api/ngo/projects/:projectId", authenticate, async (req, res) => {
   try {
     if (req.user.role !== 'ngo') {
@@ -1527,18 +1569,37 @@ app.delete("/api/ngo/projects/:projectId", authenticate, async (req, res) => {
     // Get ngo_profiles.id for this user
     const ngoProfile = await db.query('SELECT id FROM ngo_profiles WHERE user_id = $1', [req.user.id]);
     
-    // Delete/Archive project (check both user.id and ngo_profiles.id)
+    // Verify project belongs to this NGO before deleting
+    let existing;
+    if (ngoProfile.rows.length > 0) {
+      const ngoProfileId = ngoProfile.rows[0].id;
+      existing = await db.query(
+        'SELECT id, title FROM projects WHERE id = $1 AND (ngo_id = $2 OR ngo_id = $3)',
+        [projectId, req.user.id, ngoProfileId]
+      );
+    } else {
+      existing = await db.query(
+        'SELECT id, title FROM projects WHERE id = $1 AND ngo_id = $2',
+        [projectId, req.user.id]
+      );
+    }
+
+    if (existing.rows.length === 0) {
+      return sendErrorResponse(res, 404, "Project not found or you don't have permission", null, 'NGO Delete Project');
+    }
+
+    // Actually delete the project from the database
     let result;
     if (ngoProfile.rows.length > 0) {
       const ngoProfileId = ngoProfile.rows[0].id;
       result = await db.query(
-        'UPDATE projects SET status = $1, updated_at = NOW() WHERE id = $2 AND (ngo_id = $3 OR ngo_id = $4) RETURNING *',
-        ['archived', projectId, req.user.id, ngoProfileId]
+        'DELETE FROM projects WHERE id = $1 AND (ngo_id = $2 OR ngo_id = $3) RETURNING *',
+        [projectId, req.user.id, ngoProfileId]
       );
     } else {
       result = await db.query(
-        'UPDATE projects SET status = $1, updated_at = NOW() WHERE id = $2 AND ngo_id = $3 RETURNING *',
-        ['archived', projectId, req.user.id]
+        'DELETE FROM projects WHERE id = $1 AND ngo_id = $2 RETURNING *',
+        [projectId, req.user.id]
       );
     }
 
@@ -1546,10 +1607,10 @@ app.delete("/api/ngo/projects/:projectId", authenticate, async (req, res) => {
       return sendErrorResponse(res, 404, "Project not found or you don't have permission", null, 'NGO Delete Project');
     }
 
-    sendSuccessResponse(res, { project: result.rows[0] }, "Project archived successfully", 'NGO Delete Project');
+    sendSuccessResponse(res, { project: result.rows[0] }, "Project deleted successfully", 'NGO Delete Project');
 
   } catch (error) {
-    sendErrorResponse(res, 500, "Failed to archive project", error, 'NGO Delete Project');
+    sendErrorResponse(res, 500, "Failed to delete project", error, 'NGO Delete Project');
   }
 });
 

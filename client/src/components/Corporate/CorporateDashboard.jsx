@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
     PieChart,
     Pie,
@@ -110,6 +111,7 @@ import {
     saveCorporateNgo,
     removeCorporateNgo,
     getCorporateActivity,
+    logout,
 } from "../../services/api";
 
 const PIE_COLORS = ["#6366f1", "#10b981", "#f59e0b", "#ef4444"];
@@ -301,6 +303,7 @@ const timeAgo = (isoString) => {
 };
 
 export default function CorporateDashboard() {
+    const navigate = useNavigate();
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const [sidebarPinned, setSidebarPinned] = useState(true);
     const [activeNav, setActiveNav] = useState("dashboard");
@@ -338,6 +341,21 @@ export default function CorporateDashboard() {
         setAlert({ text, kind, id: Date.now() });
         setTimeout(() => setAlert(null), 3000);
     }, []);
+
+    const handleLogout = useCallback(async () => {
+        try {
+            await logout();
+        } catch (error) {
+            console.error("Logout error:", error);
+        } finally {
+            // Clear localStorage
+            localStorage.removeItem('token');
+            localStorage.removeItem('refreshToken');
+            localStorage.removeItem('user');
+            // Navigate to home page
+            navigate('/');
+        }
+    }, [navigate]);
 
     const appendActivity = (text, icon = "ℹ️") => {
         setActivityLog((prev) => [
@@ -2423,7 +2441,10 @@ export default function CorporateDashboard() {
                     })}
 
                     <div className="mt-6 border-t pt-4">
-                        <button className="w-full flex items-center gap-3 p-3 rounded-lg text-red-600 hover:bg-red-50">
+                        <button 
+                            onClick={handleLogout}
+                            className="w-full flex items-center gap-3 p-3 rounded-lg text-red-600 hover:bg-red-50"
+                        >
                             <LogOut size={18} />
                             <span className="font-medium">Logout</span>
                         </button>
