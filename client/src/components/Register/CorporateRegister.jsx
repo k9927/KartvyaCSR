@@ -1054,11 +1054,11 @@ export default function CorporateRegister() {
           localStorage.setItem('user', JSON.stringify(result.data.user));
         }
         
-        // Show success and redirect shortly to Login
+        // Show success and redirect to Corporate Dashboard
         setModalStatus('success');
-        setModalMessage('Registration done. Your account is under review. Redirecting to login...');
+        setModalMessage('Registration successful! Redirecting to dashboard...');
         setTimeout(() => {
-          window.location.href = '/Login';
+          window.location.href = '/corporate-dashboard';
         }, 1800);
         
       } catch (error) {

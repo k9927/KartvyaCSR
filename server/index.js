@@ -100,8 +100,9 @@ const sendSuccessResponse = (res, data = null, message = 'Success', operation = 
 
 // Middleware
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Increase JSON body size limit to handle base64-encoded images (10MB)
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -171,6 +172,44 @@ const initializeCorporateTables = async () => {
   `);
 
   await db.query(`
+    CREATE TABLE IF NOT EXISTS partnership_messages (
+      id SERIAL PRIMARY KEY,
+      partnership_id INTEGER REFERENCES active_partnerships(id) ON DELETE CASCADE,
+      sender_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      recipient_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      message TEXT NOT NULL,
+      attachments JSONB DEFAULT '[]'::jsonb,
+      read_at TIMESTAMP NULL,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS idx_partnership_messages_partnership_id
+    ON partnership_messages (partnership_id, created_at)
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS partnership_meetings (
+      id SERIAL PRIMARY KEY,
+      partnership_id INTEGER REFERENCES active_partnerships(id) ON DELETE CASCADE,
+      organizer_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      meeting_link TEXT NOT NULL,
+      scheduled_time TIMESTAMP NOT NULL,
+      status VARCHAR(20) DEFAULT 'pending',
+      accepted_at TIMESTAMP NULL,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS idx_partnership_meetings_partnership_id
+    ON partnership_meetings (partnership_id, scheduled_time)
+  `);
+
+  await db.query(`
     CREATE TABLE IF NOT EXISTS corporate_activity_log (
       id SERIAL PRIMARY KEY,
       corporate_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -178,6 +217,85 @@ const initializeCorporateTables = async () => {
       icon VARCHAR(10) DEFAULT 'ℹ️',
       created_at TIMESTAMP DEFAULT NOW()
     )
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS partnership_history (
+      id SERIAL PRIMARY KEY,
+      partnership_id INTEGER,
+      corporate_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      ngo_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      project_id INTEGER,
+      project_title TEXT,
+      project_description TEXT,
+      project_location TEXT,
+      project_focus_area TEXT,
+      agreed_budget NUMERIC(15,2),
+      total_funds_committed NUMERIC(15,2) DEFAULT 0,
+      total_funds_disbursed NUMERIC(15,2) DEFAULT 0,
+      partnership_status VARCHAR(50),
+      partnership_name TEXT,
+      deleted_at TIMESTAMP DEFAULT NOW(),
+      archived_at TIMESTAMP DEFAULT NOW(),
+      original_created_at TIMESTAMP,
+      metadata JSONB DEFAULT '{}'::jsonb
+    )
+  `);
+
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS idx_partnership_history_corporate
+    ON partnership_history (corporate_user_id, archived_at DESC)
+  `);
+
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS idx_partnership_history_ngo
+    ON partnership_history (ngo_user_id, archived_at DESC)
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS fund_utilization (
+      id SERIAL PRIMARY KEY,
+      partnership_id INTEGER REFERENCES active_partnerships(id) ON DELETE CASCADE,
+      project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+      corporate_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      ngo_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      category VARCHAR(100) NOT NULL,
+      description TEXT NOT NULL,
+      amount_used NUMERIC(15,2) NOT NULL,
+      utilization_date DATE DEFAULT CURRENT_DATE,
+      photos JSONB DEFAULT '[]'::jsonb,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS idx_fund_utilization_partnership
+    ON fund_utilization (partnership_id, utilization_date DESC)
+  `);
+
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS idx_fund_utilization_project
+    ON fund_utilization (project_id)
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS user_notifications (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      user_role VARCHAR(20),
+      type VARCHAR(30) NOT NULL,
+      title TEXT NOT NULL,
+      message TEXT,
+      metadata JSONB DEFAULT '{}'::jsonb,
+      read_at TIMESTAMP NULL,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS idx_user_notifications_user
+    ON user_notifications(user_id, created_at DESC)
   `);
 };
 
@@ -195,6 +313,50 @@ const logCorporateActivity = async (corporateUserId, text, icon = "ℹ️") => {
   } catch (error) {
     console.error("Failed to log corporate activity", error);
   }
+};
+
+const createUserNotification = async ({
+  userId,
+  userRole = null,
+  type,
+  title,
+  message = null,
+  metadata = {},
+}) => {
+  if (!userId || !type || !title) return null;
+  try {
+    const result = await db.query(
+      `INSERT INTO user_notifications (user_id, user_role, type, title, message, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *`,
+      [userId, userRole, type, title, message, metadata]
+    );
+    return result.rows[0];
+  } catch (error) {
+    console.error("Failed to create notification", error);
+    return null;
+  }
+};
+
+const getPartnershipById = async (partnershipId) => {
+  if (!partnershipId) return null;
+  const result = await db.query(
+    `SELECT * FROM active_partnerships WHERE id = $1`,
+    [partnershipId]
+  );
+  return result.rows[0] || null;
+};
+
+const ensurePartnershipAccess = async (partnershipId, userId) => {
+  const partnership = await getPartnershipById(partnershipId);
+  if (!partnership) return null;
+  if (
+    partnership.corporate_user_id !== userId &&
+    partnership.ngo_user_id !== userId
+  ) {
+    return null;
+  }
+  return partnership;
 };
 
 const parseFocusAreas = (value) => {
@@ -1271,7 +1433,7 @@ app.get("/api/corporate/dashboard-stats", authenticate, async (req, res) => {
             DATE_TRUNC('month', commitment_date) AS month_date,
             COALESCE(SUM(amount_committed), 0) AS committed
          FROM csr_funding
-         WHERE corporate_id = $1
+         WHERE corporate_id = $1 AND commitment_date IS NOT NULL
          GROUP BY month_label, month_date
          ORDER BY month_date DESC
          LIMIT 6`,
@@ -1331,6 +1493,81 @@ app.get("/api/corporate/dashboard-stats", authenticate, async (req, res) => {
     );
   } catch (error) {
     sendErrorResponse(res, 500, "Failed to retrieve dashboard stats", error, 'Corporate Dashboard Stats');
+  }
+});
+
+// Notifications APIs (shared)
+app.get("/api/notifications", authenticate, async (req, res) => {
+  try {
+    const limit = Math.min(Math.max(parseInt(req.query.limit) || 50, 1), 200);
+    const notificationsResult = await db.query(
+      `SELECT id, type, title, message, metadata, read_at, created_at
+       FROM user_notifications
+       WHERE user_id = $1
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [req.user.id, limit]
+    );
+
+    const notifications = notificationsResult.rows.map((row) => ({
+      ...row,
+      read: Boolean(row.read_at),
+    }));
+
+    sendSuccessResponse(
+      res,
+      { notifications },
+      "Notifications loaded successfully",
+      'Get Notifications'
+    );
+  } catch (error) {
+    sendErrorResponse(res, 500, "Failed to load notifications", error, 'Get Notifications');
+  }
+});
+
+app.post("/api/notifications/:notificationId/read", authenticate, async (req, res) => {
+  try {
+    const { notificationId } = req.params;
+    const result = await db.query(
+      `UPDATE user_notifications
+       SET read_at = NOW()
+       WHERE id = $1 AND user_id = $2
+       RETURNING id, type, title, message, metadata, read_at, created_at`,
+      [notificationId, req.user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return sendErrorResponse(res, 404, "Notification not found", null, 'Mark Notification Read');
+    }
+
+    sendSuccessResponse(
+      res,
+      { notification: { ...result.rows[0], read: Boolean(result.rows[0].read_at) } },
+      "Notification marked as read",
+      'Mark Notification Read'
+    );
+  } catch (error) {
+    sendErrorResponse(res, 500, "Failed to mark notification as read", error, 'Mark Notification Read');
+  }
+});
+
+app.post("/api/notifications/mark-all-read", authenticate, async (req, res) => {
+  try {
+    const result = await db.query(
+      `UPDATE user_notifications
+       SET read_at = NOW()
+       WHERE user_id = $1 AND read_at IS NULL`,
+      [req.user.id]
+    );
+
+    sendSuccessResponse(
+      res,
+      { updated: result.rowCount },
+      "Notifications marked as read",
+      'Mark All Notifications Read'
+    );
+  } catch (error) {
+    sendErrorResponse(res, 500, "Failed to mark notifications as read", error, 'Mark All Notifications Read');
   }
 });
 
@@ -1588,6 +1825,122 @@ app.delete("/api/ngo/projects/:projectId", authenticate, async (req, res) => {
       return sendErrorResponse(res, 404, "Project not found or you don't have permission", null, 'NGO Delete Project');
     }
 
+    // Get full project details before deletion
+    const projectDetails = await db.query(
+      `SELECT p.*, np.organization_name as ngo_name
+       FROM projects p
+       LEFT JOIN ngo_profiles np ON p.ngo_id = np.user_id
+       WHERE p.id = $1`,
+      [projectId]
+    );
+
+    if (projectDetails.rows.length === 0) {
+      return sendErrorResponse(res, 404, "Project not found", null, 'NGO Delete Project');
+    }
+
+    const project = projectDetails.rows[0];
+
+    // Get all partnerships related to this project (simplified query)
+    const partnershipsQuery = await db.query(
+      `SELECT ap.id, ap.corporate_user_id, ap.ngo_user_id, ap.project_id,
+              ap.partnership_name, ap.agreed_budget, ap.status, ap.created_at, ap.csr_funding_id
+       FROM active_partnerships ap
+       WHERE ap.project_id = $1`,
+      [projectId]
+    );
+
+    // Get funding totals for each partnership separately
+    const partnerships = await Promise.all(
+      partnershipsQuery.rows.map(async (ap) => {
+        let total_funds_committed = 0;
+        let total_funds_disbursed = 0;
+        
+        // Try to get funding data if csr_funding_id exists or by project/corporate match
+        try {
+          let fundingQuery;
+          if (ap.csr_funding_id) {
+            // First try by csr_funding_id
+            fundingQuery = await db.query(
+              `SELECT 
+                COALESCE(SUM(cf.amount_committed), 0) as total_funds_committed,
+                COALESCE(SUM(cf.amount_disbursed), 0) as total_funds_disbursed
+               FROM csr_funding cf
+               WHERE cf.id = $1`,
+              [ap.csr_funding_id]
+            );
+          }
+          
+          // Also check by project_id and corporate_id (in case csr_funding_id is null)
+          if (!fundingQuery || parseFloat(fundingQuery.rows[0]?.total_funds_committed || 0) === 0) {
+            fundingQuery = await db.query(
+              `SELECT 
+                COALESCE(SUM(cf.amount_committed), 0) as total_funds_committed,
+                COALESCE(SUM(cf.amount_disbursed), 0) as total_funds_disbursed
+               FROM csr_funding cf
+               WHERE cf.project_id = $1 AND cf.corporate_id = $2`,
+              [ap.project_id, ap.corporate_user_id]
+            );
+          }
+          
+          if (fundingQuery && fundingQuery.rows[0]) {
+            total_funds_committed = parseFloat(fundingQuery.rows[0]?.total_funds_committed || 0);
+            total_funds_disbursed = parseFloat(fundingQuery.rows[0]?.total_funds_disbursed || 0);
+          }
+        } catch (err) {
+          // If funding query fails, use 0 values (not critical for deletion)
+          console.error('Error fetching funding data for partnership:', ap.id, err);
+        }
+        
+        return {
+          ...ap,
+          total_funds_committed,
+          total_funds_disbursed,
+        };
+      })
+    );
+
+    // Archive partnerships to history before deletion (if any exist)
+    if (partnerships.length > 0) {
+      for (const partnership of partnerships) {
+        try {
+          await db.query(
+            `INSERT INTO partnership_history (
+              partnership_id, corporate_user_id, ngo_user_id, project_id,
+              project_title, project_description, project_location, project_focus_area,
+              agreed_budget, total_funds_committed, total_funds_disbursed,
+              partnership_status, partnership_name, original_created_at, metadata
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+            [
+              partnership.id,
+              partnership.corporate_user_id,
+              partnership.ngo_user_id,
+              projectId,
+              project.title,
+              project.description,
+              project.location,
+              project.focus_area,
+              partnership.agreed_budget || 0,
+              partnership.total_funds_committed || 0,
+              partnership.total_funds_disbursed || 0,
+              partnership.status,
+              partnership.partnership_name,
+              partnership.created_at,
+              JSON.stringify({
+                project_status: project.status,
+                project_progress: project.progress,
+                project_required_funding: project.required_funding,
+                project_beneficiaries_count: project.beneficiaries_count,
+                ngo_name: project.ngo_name,
+              })
+            ]
+          );
+        } catch (archiveError) {
+          // Log but don't fail - continue with deletion
+          console.error('Error archiving partnership:', partnership.id, archiveError);
+        }
+      }
+    }
+
     // Actually delete the project from the database
     let result;
     if (ngoProfile.rows.length > 0) {
@@ -1607,7 +1960,7 @@ app.delete("/api/ngo/projects/:projectId", authenticate, async (req, res) => {
       return sendErrorResponse(res, 404, "Project not found or you don't have permission", null, 'NGO Delete Project');
     }
 
-    sendSuccessResponse(res, { project: result.rows[0] }, "Project deleted successfully", 'NGO Delete Project');
+    sendSuccessResponse(res, { project: result.rows[0] }, "Project deleted successfully. Historical data has been preserved.", 'NGO Delete Project');
 
   } catch (error) {
     sendErrorResponse(res, 500, "Failed to delete project", error, 'NGO Delete Project');
@@ -1819,6 +2172,12 @@ async function sendCorporateRequest(req, res) {
       return sendErrorResponse(res, 404, "NGO not found", null, 'Corporate Send CSR Request');
     }
 
+    const corporateProfileResult = await client.query(
+      'SELECT company_name FROM corporate_profiles WHERE user_id = $1',
+      [req.user.id]
+    );
+    const corporateName = corporateProfileResult.rows[0]?.company_name || req.user?.name || "Corporate Partner";
+
     const existing = await client.query(
       `SELECT id FROM csr_requests 
        WHERE corporate_user_id = $1 AND ngo_user_id = $2 AND status = 'pending'`,
@@ -1862,6 +2221,20 @@ async function sendCorporateRequest(req, res) {
 
     const ngoName = ngoCheck.rows[0].organization_name || "NGO";
     await logCorporateActivity(req.user.id, `Sent CSR request to ${ngoName}`, "📤");
+
+    await createUserNotification({
+      userId: ngoUserId,
+      userRole: 'ngo',
+      type: 'request',
+      title: 'New CSR Request',
+      message: `${corporateName} sent you a CSR request${budgetDisplay ? ` for ${budgetDisplay}` : ''}`,
+      metadata: {
+        requestId: insertResult.rows[0].id,
+        corporateUserId: req.user.id,
+        ngoUserId,
+        projectId: project_id || null,
+      },
+    });
 
     const mappedRequest = mapCorporateRequestRow({
       ...insertResult.rows[0],
@@ -1969,6 +2342,7 @@ app.get("/api/corporate/projects", authenticate, async (req, res) => {
       SELECT
         p.*,
         np.organization_name AS ngo_name,
+        ap.id AS partnership_id,
         ap.status AS partnership_status,
         ap.created_at AS partnership_created_at
       FROM active_partnerships ap
@@ -2375,6 +2749,12 @@ app.post("/api/ngo/csr-requests/:requestId/accept", authenticate, async (req, re
 
     const request = csrRequest.rows[0];
 
+    const ngoProfileResult = await client.query(
+      `SELECT organization_name FROM ngo_profiles WHERE user_id = $1`,
+      [req.user.id]
+    );
+    const ngoName = ngoProfileResult.rows[0]?.organization_name || req.user?.name || "NGO Partner";
+
     // Update request status
     await client.query(
       `UPDATE csr_requests SET status = 'accepted', ngo_response = $1, responded_at = NOW() WHERE id = $2`,
@@ -2399,12 +2779,39 @@ app.post("/api/ngo/csr-requests/:requestId/accept", authenticate, async (req, re
       ]
     );
 
-    // Create csr_funding record
-    await client.query(
-      `INSERT INTO csr_funding (corporate_id, project_id, amount_committed, funding_status, commitment_date)
-       VALUES ($1, $2, $3, 'committed', NOW())`,
-      [request.corporate_user_id, request.project_id, request.proposed_budget]
-    );
+    // Create csr_funding record - mark as committed since NGO accepted (will be disbursed later)
+    // Note: project_id is required in csr_funding, so we use a default project or the request's project_id
+    const projectIdForFunding = request.project_id || null;
+    
+    // If no project_id, we can't create csr_funding (it's required), so skip it
+    // The partnership will still be created without csr_funding_id
+    let fundingResult = null;
+    if (projectIdForFunding) {
+      fundingResult = await client.query(
+        `INSERT INTO csr_funding (corporate_id, project_id, amount_committed, funding_status, commitment_date)
+         VALUES ($1, $2, $3, 'committed', CURRENT_DATE)
+         RETURNING *`,
+        [request.corporate_user_id, projectIdForFunding, request.proposed_budget]
+      );
+    }
+
+    // Update partnership with funding_id (if funding was created)
+    if (fundingResult && fundingResult.rows && fundingResult.rows[0]) {
+      await client.query(
+        `UPDATE active_partnerships 
+         SET csr_funding_id = $1, progress = 0
+         WHERE id = $2`,
+        [fundingResult.rows[0].id, partnershipResult.rows[0].id]
+      );
+    } else {
+      // Set progress to 0 even if no funding record
+      await client.query(
+        `UPDATE active_partnerships 
+         SET progress = 0
+         WHERE id = $1`,
+        [partnershipResult.rows[0].id]
+      );
+    }
 
     // Update project status if project_id exists
     if (request.project_id) {
@@ -2415,9 +2822,24 @@ app.post("/api/ngo/csr-requests/:requestId/accept", authenticate, async (req, re
     }
 
     await client.query('COMMIT');
+    const partnership = partnershipResult.rows[0];
+
+    await createUserNotification({
+      userId: request.corporate_user_id,
+      userRole: 'corporate',
+      type: 'accepted',
+      title: 'CSR Request Accepted',
+      message: `${ngoName} accepted your CSR request${request.description ? ` for ${request.description}` : ''}.`,
+      metadata: {
+        requestId,
+        partnershipId: partnership?.id,
+        ngoUserId: request.ngo_user_id,
+      },
+    });
+
     sendSuccessResponse(res, {
       request: { ...request, status: 'accepted' },
-      partnership: partnershipResult.rows[0]
+      partnership
     }, "CSR request accepted. Partnership created successfully!", 'NGO Accept Request');
 
   } catch (error) {
@@ -2449,6 +2871,24 @@ app.post("/api/ngo/csr-requests/:requestId/reject", authenticate, async (req, re
       return sendErrorResponse(res, 404, "Request not found or already processed", null, 'NGO Reject Request');
     }
 
+    const ngoProfileResult = await db.query(
+      `SELECT organization_name FROM ngo_profiles WHERE user_id = $1`,
+      [req.user.id]
+    );
+    const ngoName = ngoProfileResult.rows[0]?.organization_name || req.user?.name || "NGO Partner";
+
+    await createUserNotification({
+      userId: result.rows[0].corporate_user_id,
+      userRole: 'corporate',
+      type: 'rejected',
+      title: 'CSR Request Rejected',
+      message: `${ngoName} rejected your CSR request${reason ? `: ${reason}` : ''}.`,
+      metadata: {
+        requestId,
+        ngoUserId: req.user.id,
+      },
+    });
+
     sendSuccessResponse(res, { request: result.rows[0] }, "CSR request rejected", 'NGO Reject Request');
 
   } catch (error) {
@@ -2476,15 +2916,29 @@ app.get("/api/ngo/partnerships", authenticate, async (req, res) => {
         cpf.company_name,
         cpf.primary_focus_area,
         p.title as project_name,
-        p.description as project_description
+        p.description as project_description,
+        COALESCE(SUM(fu.amount_used), 0) as total_funds_utilized,
+        CASE 
+          WHEN ap.agreed_budget > 0 
+          THEN LEAST(100, ROUND((COALESCE(SUM(fu.amount_used), 0) / ap.agreed_budget) * 100))
+          ELSE COALESCE(ap.progress, 0)
+        END as calculated_progress
       FROM active_partnerships ap
       JOIN corporate_profiles cpf ON ap.corporate_user_id = cpf.user_id
       LEFT JOIN projects p ON ap.project_id = p.id
+      LEFT JOIN fund_utilization fu ON ap.id = fu.partnership_id
       WHERE ap.ngo_user_id = $1 AND ap.status = $2
+      GROUP BY ap.id, cpf.id, p.id
       ORDER BY ap.created_at DESC
       LIMIT $3 OFFSET $4`,
       [req.user.id, status, limit, offset]
     );
+
+    // Update progress in results to use calculated progress if fund utilization exists
+    const updatedPartnerships = partnerships.rows.map(p => ({
+      ...p,
+      progress: p.total_funds_utilized > 0 ? p.calculated_progress : (p.progress || 0)
+    }));
 
     const countResult = await db.query(
       `SELECT COUNT(*) FROM active_partnerships WHERE ngo_user_id = $1 AND status = $2`,
@@ -2492,11 +2946,11 @@ app.get("/api/ngo/partnerships", authenticate, async (req, res) => {
     );
 
     sendSuccessResponse(res, {
-      partnerships: partnerships.rows,
+      partnerships: updatedPartnerships,
       total: parseInt(countResult.rows[0].count),
       page: parseInt(page),
       limit: parseInt(limit)
-    }, `Found ${partnerships.rows.length} partnerships`, 'NGO View Partnerships');
+    }, `Found ${updatedPartnerships.length} partnerships`, 'NGO View Partnerships');
 
   } catch (error) {
     sendErrorResponse(res, 500, "Failed to retrieve partnerships", error, 'NGO View Partnerships');
@@ -2519,15 +2973,29 @@ app.get("/api/corporate/partnerships", authenticate, async (req, res) => {
         np.organization_name as ngo_name,
         np.focus_area,
         p.title as project_name,
-        p.description as project_description
+        p.description as project_description,
+        COALESCE(SUM(fu.amount_used), 0) as total_funds_utilized,
+        CASE 
+          WHEN ap.agreed_budget > 0 
+          THEN LEAST(100, ROUND((COALESCE(SUM(fu.amount_used), 0) / ap.agreed_budget) * 100))
+          ELSE COALESCE(ap.progress, 0)
+        END as calculated_progress
       FROM active_partnerships ap
       JOIN ngo_profiles np ON ap.ngo_user_id = np.user_id
       LEFT JOIN projects p ON ap.project_id = p.id
+      LEFT JOIN fund_utilization fu ON ap.id = fu.partnership_id
       WHERE ap.corporate_user_id = $1 AND ap.status = $2
+      GROUP BY ap.id, np.id, p.id
       ORDER BY ap.created_at DESC
       LIMIT $3 OFFSET $4`,
       [req.user.id, status, limit, offset]
     );
+
+    // Update progress in results to use calculated progress if fund utilization exists
+    const updatedPartnerships = partnerships.rows.map(p => ({
+      ...p,
+      progress: p.total_funds_utilized > 0 ? p.calculated_progress : (p.progress || 0)
+    }));
 
     const countResult = await db.query(
       `SELECT COUNT(*) FROM active_partnerships WHERE corporate_user_id = $1 AND status = $2`,
@@ -2535,26 +3003,22 @@ app.get("/api/corporate/partnerships", authenticate, async (req, res) => {
     );
 
     sendSuccessResponse(res, {
-      partnerships: partnerships.rows,
+      partnerships: updatedPartnerships,
       total: parseInt(countResult.rows[0].count),
       page: parseInt(page),
       limit: parseInt(limit)
-    }, `Found ${partnerships.rows.length} partnerships`, 'Corporate View Partnerships');
+    }, `Found ${updatedPartnerships.length} partnerships`, 'Corporate View Partnerships');
 
   } catch (error) {
     sendErrorResponse(res, 500, "Failed to retrieve partnerships", error, 'Corporate View Partnerships');
   }
 });
 
-// Update Partnership Progress
+// Update Partnership Progress (can be manual or auto-calculated from fund utilization)
 app.put("/api/partnerships/:partnershipId/progress", authenticate, async (req, res) => {
   try {
     const { partnershipId } = req.params;
-    const { progress } = req.body;
-
-    if (!progress || progress < 0 || progress > 100) {
-      return sendErrorResponse(res, 400, "Progress must be between 0 and 100", null, 'Update Partnership Progress');
-    }
+    const { progress, calculate_from_funds } = req.body;
 
     // Verify user has access to this partnership
     const partnership = await db.query(
@@ -2567,17 +3031,32 @@ app.put("/api/partnerships/:partnershipId/progress", authenticate, async (req, r
       return sendErrorResponse(res, 404, "Partnership not found or you don't have permission", null, 'Update Partnership Progress');
     }
 
+    let finalProgress = progress;
+
+    // If calculate_from_funds is true, calculate progress from fund utilization
+    if (calculate_from_funds) {
+      const calculatedProgress = await updateProgressFromFundUtilization(partnershipId, partnership.rows[0].project_id);
+      if (calculatedProgress !== null) {
+        finalProgress = calculatedProgress;
+      }
+    } else {
+      // Manual progress update
+      if (progress === undefined || progress === null || progress < 0 || progress > 100) {
+        return sendErrorResponse(res, 400, "Progress must be between 0 and 100", null, 'Update Partnership Progress');
+      }
+    }
+
     const result = await db.query(
       `UPDATE active_partnerships SET progress = $1, updated_at = NOW() 
        WHERE id = $2 RETURNING *`,
-      [progress, partnershipId]
+      [finalProgress, partnershipId]
     );
 
     // Update project progress if linked
     if (partnership.rows[0].project_id) {
       await db.query(
         `UPDATE projects SET progress = $1, updated_at = NOW() WHERE id = $2`,
-        [progress, partnership.rows[0].project_id]
+        [finalProgress, partnership.rows[0].project_id]
       );
     }
 
@@ -2585,6 +3064,968 @@ app.put("/api/partnerships/:partnershipId/progress", authenticate, async (req, r
 
   } catch (error) {
     sendErrorResponse(res, 500, "Failed to update progress", error, 'Update Partnership Progress');
+  }
+});
+
+app.get("/api/partnerships/:partnershipId/messages", authenticate, async (req, res) => {
+  try {
+    const { partnershipId } = req.params;
+    const page = Math.max(parseInt(req.query.page) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit) || 25, 1), 100);
+    const offset = (page - 1) * limit;
+
+    const partnership = await ensurePartnershipAccess(partnershipId, req.user.id);
+    if (!partnership) {
+      return sendErrorResponse(res, 404, "Partnership not found or you don't have permission", null, 'View Partnership Messages');
+    }
+
+    const messagesResult = await db.query(
+      `SELECT pm.*, u.name as sender_name, u.user_type as sender_role
+       FROM partnership_messages pm
+       LEFT JOIN users u ON pm.sender_user_id = u.id
+       WHERE pm.partnership_id = $1
+       ORDER BY pm.created_at ASC
+       LIMIT $2 OFFSET $3`,
+      [partnershipId, limit, offset]
+    );
+
+    sendSuccessResponse(
+      res,
+      {
+        messages: messagesResult.rows,
+        page,
+        limit,
+      },
+      "Messages retrieved successfully",
+      'View Partnership Messages'
+    );
+  } catch (error) {
+    sendErrorResponse(res, 500, "Failed to retrieve messages", error, 'View Partnership Messages');
+  }
+});
+
+app.post("/api/partnerships/:partnershipId/messages", authenticate, async (req, res) => {
+  try {
+    const { partnershipId } = req.params;
+    const { message } = req.body;
+
+    if (!message || !message.trim()) {
+      return sendErrorResponse(res, 400, "Message text is required", null, 'Send Partnership Message');
+    }
+
+    const partnership = await ensurePartnershipAccess(partnershipId, req.user.id);
+    if (!partnership) {
+      return sendErrorResponse(res, 404, "Partnership not found or you don't have permission", null, 'Send Partnership Message');
+    }
+
+    const recipientId =
+      req.user.id === partnership.corporate_user_id
+        ? partnership.ngo_user_id
+        : partnership.corporate_user_id;
+
+    const insertResult = await db.query(
+      `INSERT INTO partnership_messages (partnership_id, sender_user_id, recipient_user_id, message)
+       VALUES ($1, $2, $3, $4)
+       RETURNING *`,
+      [partnershipId, req.user.id, recipientId, message.trim()]
+    );
+
+    const senderDetails = await db.query(
+      `SELECT name, user_type FROM users WHERE id = $1`,
+      [req.user.id]
+    );
+
+    const recipientDetails = await db.query(
+      `SELECT name, user_type FROM users WHERE id = $1`,
+      [recipientId]
+    );
+
+    // Get partnership/project name for notification context
+    const partnershipInfo = await db.query(
+      `SELECT 
+        ap.partnership_name,
+        p.title as project_name,
+        np.organization_name as ngo_name,
+        cpf.company_name as corporate_name
+      FROM active_partnerships ap
+      LEFT JOIN projects p ON ap.project_id = p.id
+      LEFT JOIN ngo_profiles np ON ap.ngo_user_id = np.user_id
+      LEFT JOIN corporate_profiles cpf ON ap.corporate_user_id = cpf.user_id
+      WHERE ap.id = $1`,
+      [partnershipId]
+    );
+
+    const partnershipDetails = partnershipInfo.rows[0];
+    const projectName = partnershipDetails?.project_name || partnershipDetails?.partnership_name || 'Partnership';
+    const partnerName = req.user.role === 'corporate' 
+      ? partnershipDetails?.ngo_name || 'NGO Partner'
+      : partnershipDetails?.corporate_name || 'Corporate Partner';
+
+    // Create notification for recipient
+    await createUserNotification({
+      userId: recipientId,
+      userRole: recipientDetails.rows[0]?.user_type || null,
+      type: 'message',
+      title: 'New Message',
+      message: `${senderDetails.rows[0]?.name || 'Partner'} sent you a message in ${projectName}`,
+      metadata: {
+        partnershipId,
+        senderId: req.user.id,
+        senderName: senderDetails.rows[0]?.name || null,
+        projectName,
+        partnerName,
+      },
+    });
+
+    const insertedMessage = {
+      ...insertResult.rows[0],
+      sender_name: senderDetails.rows[0]?.name || null,
+      sender_role: senderDetails.rows[0]?.user_type || null,
+    };
+
+    sendSuccessResponse(
+      res,
+      { message: insertedMessage },
+      "Message sent successfully",
+      'Send Partnership Message'
+    );
+  } catch (error) {
+    sendErrorResponse(res, 500, "Failed to send message", error, 'Send Partnership Message');
+  }
+});
+
+// Create Meeting Invitation
+app.post("/api/partnerships/:partnershipId/meetings", authenticate, async (req, res) => {
+  try {
+    const { partnershipId } = req.params;
+    const { scheduled_time } = req.body;
+
+    if (!scheduled_time) {
+      return sendErrorResponse(res, 400, "Scheduled time is required", null, 'Create Meeting');
+    }
+
+    const partnership = await ensurePartnershipAccess(partnershipId, req.user.id);
+    if (!partnership) {
+      return sendErrorResponse(res, 404, "Partnership not found or you don't have permission", null, 'Create Meeting');
+    }
+
+    // Generate a random meeting link (using a simple format - you can use actual video conferencing APIs)
+    const meetingId = `meet-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const meetingLink = `https://meet.kartvya.com/${meetingId}`;
+
+    const scheduledTime = new Date(scheduled_time);
+    if (isNaN(scheduledTime.getTime()) || scheduledTime < new Date()) {
+      return sendErrorResponse(res, 400, "Scheduled time must be in the future", null, 'Create Meeting');
+    }
+
+    const recipientId =
+      req.user.id === partnership.corporate_user_id
+        ? partnership.ngo_user_id
+        : partnership.corporate_user_id;
+
+    const result = await db.query(
+      `INSERT INTO partnership_meetings (partnership_id, organizer_user_id, meeting_link, scheduled_time, status)
+       VALUES ($1, $2, $3, $4, 'pending')
+       RETURNING *`,
+      [partnershipId, req.user.id, meetingLink, scheduledTime]
+    );
+
+    // Get partnership details for notification
+    const partnershipInfo = await db.query(
+      `SELECT 
+        ap.partnership_name,
+        p.title as project_name,
+        np.organization_name as ngo_name,
+        cpf.company_name as corporate_name
+      FROM active_partnerships ap
+      LEFT JOIN projects p ON ap.project_id = p.id
+      LEFT JOIN ngo_profiles np ON ap.ngo_user_id = np.user_id
+      LEFT JOIN corporate_profiles cpf ON ap.corporate_user_id = cpf.user_id
+      WHERE ap.id = $1`,
+      [partnershipId]
+    );
+
+    const partnershipDetails = partnershipInfo.rows[0];
+    const projectName = partnershipDetails?.project_name || partnershipDetails?.partnership_name || 'Partnership';
+    const senderDetails = await db.query(
+      `SELECT name FROM users WHERE id = $1`,
+      [req.user.id]
+    );
+
+    // Create notification for recipient
+    await createUserNotification({
+      userId: recipientId,
+      userRole: req.user.role === 'corporate' ? 'ngo' : 'corporate',
+      type: 'meeting',
+      title: 'Meeting Invitation',
+      message: `${senderDetails.rows[0]?.name || 'Partner'} invited you to a meeting for ${projectName}`,
+      metadata: {
+        partnershipId,
+        meetingId: result.rows[0].id,
+        scheduledTime: scheduledTime.toISOString(),
+        meetingLink,
+        projectName,
+      },
+    });
+
+    sendSuccessResponse(
+      res,
+      { meeting: result.rows[0] },
+      "Meeting invitation sent successfully",
+      'Create Meeting'
+    );
+  } catch (error) {
+    sendErrorResponse(res, 500, "Failed to create meeting", error, 'Create Meeting');
+  }
+});
+
+// Get Meetings for Partnership
+app.get("/api/partnerships/:partnershipId/meetings", authenticate, async (req, res) => {
+  try {
+    const { partnershipId } = req.params;
+
+    const partnership = await ensurePartnershipAccess(partnershipId, req.user.id);
+    if (!partnership) {
+      return sendErrorResponse(res, 404, "Partnership not found or you don't have permission", null, 'Get Meetings');
+    }
+
+    const meetings = await db.query(
+      `SELECT pm.*, u.name as organizer_name
+       FROM partnership_meetings pm
+       LEFT JOIN users u ON pm.organizer_user_id = u.id
+       WHERE pm.partnership_id = $1
+       ORDER BY pm.scheduled_time DESC`,
+      [partnershipId]
+    );
+
+    // Auto-mark meetings as ended if they've passed scheduled_time + 10 minutes
+    const now = new Date();
+    const endedMeetings = [];
+    for (const meeting of meetings.rows) {
+      if (meeting.status === 'accepted') {
+        const scheduledTime = new Date(meeting.scheduled_time);
+        const endTime = new Date(scheduledTime.getTime() + 10 * 60 * 1000); // Add 10 minutes
+        if (now > endTime) {
+          await db.query(
+            `UPDATE partnership_meetings 
+             SET status = 'ended', updated_at = NOW()
+             WHERE id = $1 AND status = 'accepted'`,
+            [meeting.id]
+          );
+          endedMeetings.push(meeting.id);
+        }
+      }
+    }
+
+    // Re-fetch meetings to get updated status
+    const updatedMeetings = await db.query(
+      `SELECT pm.*, u.name as organizer_name
+       FROM partnership_meetings pm
+       LEFT JOIN users u ON pm.organizer_user_id = u.id
+       WHERE pm.partnership_id = $1
+       ORDER BY pm.scheduled_time DESC`,
+      [partnershipId]
+    );
+
+    sendSuccessResponse(
+      res,
+      { meetings: updatedMeetings.rows },
+      "Meetings retrieved successfully",
+      'Get Meetings'
+    );
+  } catch (error) {
+    sendErrorResponse(res, 500, "Failed to retrieve meetings", error, 'Get Meetings');
+  }
+});
+
+// Accept Meeting Invitation
+app.post("/api/partnerships/:partnershipId/meetings/:meetingId/accept", authenticate, async (req, res) => {
+  try {
+    const { partnershipId, meetingId } = req.params;
+
+    const partnership = await ensurePartnershipAccess(partnershipId, req.user.id);
+    if (!partnership) {
+      return sendErrorResponse(res, 404, "Partnership not found or you don't have permission", null, 'Accept Meeting');
+    }
+
+    const meetingResult = await db.query(
+      `SELECT * FROM partnership_meetings 
+       WHERE id = $1 AND partnership_id = $2 AND status = 'pending'`,
+      [meetingId, partnershipId]
+    );
+
+    if (meetingResult.rows.length === 0) {
+      return sendErrorResponse(res, 404, "Meeting not found or already processed", null, 'Accept Meeting');
+    }
+
+    const result = await db.query(
+      `UPDATE partnership_meetings 
+       SET status = 'accepted', accepted_at = NOW(), updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [meetingId]
+    );
+
+    // Notify the organizer
+    await createUserNotification({
+      userId: meetingResult.rows[0].organizer_user_id,
+      userRole: partnership.corporate_user_id === meetingResult.rows[0].organizer_user_id ? 'corporate' : 'ngo',
+      type: 'meeting',
+      title: 'Meeting Accepted',
+      message: `Your meeting invitation has been accepted`,
+      metadata: {
+        partnershipId,
+        meetingId,
+        scheduledTime: meetingResult.rows[0].scheduled_time,
+        meetingLink: meetingResult.rows[0].meeting_link,
+      },
+    });
+
+    sendSuccessResponse(
+      res,
+      { meeting: result.rows[0] },
+      "Meeting accepted successfully",
+      'Accept Meeting'
+    );
+  } catch (error) {
+    sendErrorResponse(res, 500, "Failed to accept meeting", error, 'Accept Meeting');
+  }
+});
+
+// =============================================
+// HISTORY APIs (Both Sides)
+// =============================================
+
+// Get Partnership History (Corporate)
+app.get("/api/corporate/history", authenticate, async (req, res) => {
+  try {
+    if (req.user.role !== 'corporate') {
+      return sendErrorResponse(res, 403, "Only corporates can view their history", null, 'Corporate View History');
+    }
+
+    const { page = 1, limit = 20 } = req.query;
+    const offset = (page - 1) * limit;
+
+    // Get history from both archived records and completed/ended active partnerships
+    const history = await db.query(
+      `SELECT * FROM (
+        SELECT 
+          ph.partnership_id,
+          ph.corporate_user_id,
+          ph.ngo_user_id,
+          ph.project_id,
+          ph.project_title,
+          ph.project_description,
+          ph.project_location,
+          ph.project_focus_area,
+          ph.agreed_budget,
+          ph.total_funds_committed,
+          ph.total_funds_disbursed,
+          ph.partnership_status as status,
+          ph.partnership_name,
+          ph.archived_at,
+          ph.original_created_at,
+          COALESCE(ph.metadata, '{}'::jsonb) as metadata,
+          u1.name as corporate_name,
+          u2.name as ngo_name,
+          np.organization_name as ngo_organization_name,
+          cpf.company_name as corporate_company_name,
+          'archived' as source
+         FROM partnership_history ph
+         LEFT JOIN users u1 ON ph.corporate_user_id = u1.id
+         LEFT JOIN users u2 ON ph.ngo_user_id = u2.id
+         LEFT JOIN ngo_profiles np ON ph.ngo_user_id = np.user_id
+         LEFT JOIN corporate_profiles cpf ON ph.corporate_user_id = cpf.user_id
+         WHERE ph.corporate_user_id = $1
+         
+         UNION ALL
+         
+         SELECT 
+          ap.id as partnership_id,
+          ap.corporate_user_id,
+          ap.ngo_user_id,
+          ap.project_id,
+          p.title as project_title,
+          p.description as project_description,
+          p.location as project_location,
+          p.focus_area as project_focus_area,
+          ap.agreed_budget,
+          COALESCE(SUM(cf.amount_committed), 0) as total_funds_committed,
+          COALESCE(SUM(cf.amount_disbursed), 0) as total_funds_disbursed,
+          ap.status,
+          ap.partnership_name,
+          COALESCE(ap.end_date, ap.updated_at, ap.created_at)::timestamp as archived_at,
+          ap.created_at as original_created_at,
+          COALESCE(jsonb_build_object(
+            'project_status', p.status,
+            'project_progress', p.progress,
+            'project_required_funding', p.budget_required,
+            'project_beneficiaries_count', p.beneficiaries_count
+          ), '{}'::jsonb) as metadata,
+          u1.name as corporate_name,
+          u2.name as ngo_name,
+          np.organization_name as ngo_organization_name,
+          cpf.company_name as corporate_company_name,
+          'active' as source
+         FROM active_partnerships ap
+         LEFT JOIN projects p ON ap.project_id = p.id
+         LEFT JOIN csr_funding cf ON ap.csr_funding_id = cf.id OR (cf.project_id = ap.project_id AND cf.corporate_id = ap.corporate_user_id)
+         LEFT JOIN users u1 ON ap.corporate_user_id = u1.id
+         LEFT JOIN users u2 ON ap.ngo_user_id = u2.id
+         LEFT JOIN ngo_profiles np ON ap.ngo_user_id = np.user_id
+         LEFT JOIN corporate_profiles cpf ON ap.corporate_user_id = cpf.user_id
+         WHERE ap.corporate_user_id = $1 
+           AND ap.status IN ('completed', 'terminated', 'ended')
+         GROUP BY ap.id, p.id, u1.id, u2.id, np.id, cpf.id
+       ) combined_history
+       ORDER BY COALESCE(archived_at, original_created_at, NOW()) DESC
+       LIMIT $2 OFFSET $3`,
+      [req.user.id, limit, offset]
+    );
+
+    // Count from both sources
+    const archivedCount = await db.query(
+      `SELECT COUNT(*) FROM partnership_history WHERE corporate_user_id = $1`,
+      [req.user.id]
+    );
+    const completedCount = await db.query(
+      `SELECT COUNT(*) FROM active_partnerships 
+       WHERE corporate_user_id = $1 AND status IN ('completed', 'terminated', 'ended')`,
+      [req.user.id]
+    );
+    const totalCount = parseInt(archivedCount.rows[0].count) + parseInt(completedCount.rows[0].count);
+
+    sendSuccessResponse(
+      res,
+      {
+        history: history.rows,
+        total: totalCount,
+        page: parseInt(page),
+        limit: parseInt(limit)
+      },
+      `Found ${history.rows.length} historical records`,
+      'Corporate View History'
+    );
+  } catch (error) {
+    sendErrorResponse(res, 500, "Failed to retrieve history", error, 'Corporate View History');
+  }
+});
+
+// Get Partnership History (NGO)
+app.get("/api/ngo/history", authenticate, async (req, res) => {
+  try {
+    if (req.user.role !== 'ngo') {
+      return sendErrorResponse(res, 403, "Only NGOs can view their history", null, 'NGO View History');
+    }
+
+    const { page = 1, limit = 20 } = req.query;
+    const offset = (page - 1) * limit;
+
+    // Get history from both archived records and completed/ended active partnerships
+    const history = await db.query(
+      `SELECT * FROM (
+        SELECT 
+          ph.partnership_id,
+          ph.corporate_user_id,
+          ph.ngo_user_id,
+          ph.project_id,
+          ph.project_title,
+          ph.project_description,
+          ph.project_location,
+          ph.project_focus_area,
+          ph.agreed_budget,
+          ph.total_funds_committed,
+          ph.total_funds_disbursed,
+          ph.partnership_status as status,
+          ph.partnership_name,
+          ph.archived_at,
+          ph.original_created_at,
+          COALESCE(ph.metadata, '{}'::jsonb) as metadata,
+          u1.name as corporate_name,
+          u2.name as ngo_name,
+          np.organization_name as ngo_organization_name,
+          cpf.company_name as corporate_company_name,
+          'archived' as source
+         FROM partnership_history ph
+         LEFT JOIN users u1 ON ph.corporate_user_id = u1.id
+         LEFT JOIN users u2 ON ph.ngo_user_id = u2.id
+         LEFT JOIN ngo_profiles np ON ph.ngo_user_id = np.user_id
+         LEFT JOIN corporate_profiles cpf ON ph.corporate_user_id = cpf.user_id
+         WHERE ph.ngo_user_id = $1
+         
+         UNION ALL
+         
+         SELECT 
+          ap.id as partnership_id,
+          ap.corporate_user_id,
+          ap.ngo_user_id,
+          ap.project_id,
+          p.title as project_title,
+          p.description as project_description,
+          p.location as project_location,
+          p.focus_area as project_focus_area,
+          ap.agreed_budget,
+          COALESCE(SUM(cf.amount_committed), 0) as total_funds_committed,
+          COALESCE(SUM(cf.amount_disbursed), 0) as total_funds_disbursed,
+          ap.status,
+          ap.partnership_name,
+          COALESCE(ap.end_date, ap.updated_at, ap.created_at)::timestamp as archived_at,
+          ap.created_at as original_created_at,
+          COALESCE(jsonb_build_object(
+            'project_status', p.status,
+            'project_progress', p.progress,
+            'project_required_funding', p.budget_required,
+            'project_beneficiaries_count', p.beneficiaries_count
+          ), '{}'::jsonb) as metadata,
+          u1.name as corporate_name,
+          u2.name as ngo_name,
+          np.organization_name as ngo_organization_name,
+          cpf.company_name as corporate_company_name,
+          'active' as source
+         FROM active_partnerships ap
+         LEFT JOIN projects p ON ap.project_id = p.id
+         LEFT JOIN csr_funding cf ON ap.csr_funding_id = cf.id OR (cf.project_id = ap.project_id AND cf.corporate_id = ap.corporate_user_id)
+         LEFT JOIN users u1 ON ap.corporate_user_id = u1.id
+         LEFT JOIN users u2 ON ap.ngo_user_id = u2.id
+         LEFT JOIN ngo_profiles np ON ap.ngo_user_id = np.user_id
+         LEFT JOIN corporate_profiles cpf ON ap.corporate_user_id = cpf.user_id
+         WHERE ap.ngo_user_id = $1 
+           AND ap.status IN ('completed', 'terminated', 'ended')
+         GROUP BY ap.id, p.id, u1.id, u2.id, np.id, cpf.id
+         
+         UNION ALL
+         
+         SELECT 
+          ap.id as partnership_id,
+          ap.corporate_user_id,
+          ap.ngo_user_id,
+          ap.project_id,
+          p.title as project_title,
+          p.description as project_description,
+          p.location as project_location,
+          p.focus_area as project_focus_area,
+          ap.agreed_budget,
+          COALESCE(SUM(cf.amount_committed), 0) as total_funds_committed,
+          COALESCE(SUM(cf.amount_disbursed), 0) as total_funds_disbursed,
+          ap.status,
+          ap.partnership_name,
+          NULL::timestamp as archived_at,
+          ap.created_at as original_created_at,
+          COALESCE(jsonb_build_object(
+            'project_status', p.status,
+            'project_progress', p.progress,
+            'project_required_funding', p.budget_required,
+            'project_beneficiaries_count', p.beneficiaries_count
+          ), '{}'::jsonb) as metadata,
+          u1.name as corporate_name,
+          u2.name as ngo_name,
+          np.organization_name as ngo_organization_name,
+          cpf.company_name as corporate_company_name,
+          'active' as source
+         FROM active_partnerships ap
+         LEFT JOIN projects p ON ap.project_id = p.id
+         LEFT JOIN csr_funding cf ON ap.csr_funding_id = cf.id OR (cf.project_id = ap.project_id AND cf.corporate_id = ap.corporate_user_id)
+         LEFT JOIN users u1 ON ap.corporate_user_id = u1.id
+         LEFT JOIN users u2 ON ap.ngo_user_id = u2.id
+         LEFT JOIN ngo_profiles np ON ap.ngo_user_id = np.user_id
+         LEFT JOIN corporate_profiles cpf ON ap.corporate_user_id = cpf.user_id
+         WHERE ap.ngo_user_id = $1 
+           AND ap.status = 'active'
+         GROUP BY ap.id, p.id, u1.id, u2.id, np.id, cpf.id
+       ) combined_history
+       ORDER BY COALESCE(archived_at, original_created_at, NOW()) DESC
+       LIMIT $2 OFFSET $3`,
+      [req.user.id, limit, offset]
+    );
+
+    // Count from all sources (archived, completed, and active)
+    const archivedCount = await db.query(
+      `SELECT COUNT(*) FROM partnership_history WHERE ngo_user_id = $1`,
+      [req.user.id]
+    );
+    const completedCount = await db.query(
+      `SELECT COUNT(*) FROM active_partnerships 
+       WHERE ngo_user_id = $1 AND status IN ('completed', 'terminated', 'ended')`,
+      [req.user.id]
+    );
+    const activeCount = await db.query(
+      `SELECT COUNT(*) FROM active_partnerships 
+       WHERE ngo_user_id = $1 AND status = 'active'`,
+      [req.user.id]
+    );
+    const totalCount = parseInt(archivedCount.rows[0].count) + parseInt(completedCount.rows[0].count) + parseInt(activeCount.rows[0].count);
+
+    sendSuccessResponse(
+      res,
+      {
+        history: history.rows,
+        total: totalCount,
+        page: parseInt(page),
+        limit: parseInt(limit)
+      },
+      `Found ${history.rows.length} historical records`,
+      'NGO View History'
+    );
+  } catch (error) {
+    sendErrorResponse(res, 500, "Failed to retrieve history", error, 'NGO View History');
+  }
+});
+
+// =============================================
+// FUND UTILIZATION APIs
+// =============================================
+
+// Helper function to calculate and update progress based on fund utilization
+const updateProgressFromFundUtilization = async (partnershipId, projectId = null) => {
+  try {
+    // Get total funds committed for this partnership
+    const partnership = await db.query(
+      `SELECT agreed_budget, project_id FROM active_partnerships WHERE id = $1`,
+      [partnershipId]
+    );
+
+    if (partnership.rows.length === 0) return;
+
+    const agreedBudget = parseFloat(partnership.rows[0].agreed_budget || 0);
+    const actualProjectId = projectId || partnership.rows[0].project_id;
+
+    if (agreedBudget <= 0) return;
+
+    // Get total funds utilized for this partnership
+    const utilizationResult = await db.query(
+      `SELECT COALESCE(SUM(amount_used), 0) as total_utilized
+       FROM fund_utilization
+       WHERE partnership_id = $1`,
+      [partnershipId]
+    );
+
+    const totalUtilized = parseFloat(utilizationResult.rows[0]?.total_utilized || 0);
+    
+    // Calculate progress as percentage of funds utilized
+    const progress = Math.min(100, Math.round((totalUtilized / agreedBudget) * 100));
+
+    // Update partnership progress
+    await db.query(
+      `UPDATE active_partnerships 
+       SET progress = $1, updated_at = NOW() 
+       WHERE id = $2`,
+      [progress, partnershipId]
+    );
+
+    // Update project progress if linked
+    if (actualProjectId) {
+      await db.query(
+        `UPDATE projects 
+         SET progress = $1, updated_at = NOW() 
+         WHERE id = $2`,
+        [progress, actualProjectId]
+      );
+    }
+
+    return progress;
+  } catch (error) {
+    console.error("Failed to update progress from fund utilization", error);
+    return null;
+  }
+};
+
+// Add Fund Utilization Entry (NGO)
+app.post("/api/partnerships/:partnershipId/fund-utilization", authenticate, async (req, res) => {
+  try {
+    const { partnershipId } = req.params;
+    const { category, description, amount_used, utilization_date, photos } = req.body;
+
+    if (!category || !description || !amount_used || amount_used <= 0) {
+      return sendErrorResponse(res, 400, "Category, description, and valid amount are required", null, 'Add Fund Utilization');
+    }
+
+    const partnership = await ensurePartnershipAccess(partnershipId, req.user.id);
+    if (!partnership) {
+      return sendErrorResponse(res, 404, "Partnership not found or you don't have permission", null, 'Add Fund Utilization');
+    }
+
+    if (req.user.role !== 'ngo' || partnership.ngo_user_id !== req.user.id) {
+      return sendErrorResponse(res, 403, "Only the NGO partner can add fund utilization", null, 'Add Fund Utilization');
+    }
+
+    // Check total utilization doesn't exceed agreed budget
+    const totalUtilizedResult = await db.query(
+      `SELECT COALESCE(SUM(amount_used), 0) as total_utilized
+       FROM fund_utilization
+       WHERE partnership_id = $1`,
+      [partnershipId]
+    );
+    const totalUtilized = parseFloat(totalUtilizedResult.rows[0]?.total_utilized || 0);
+    const newTotal = totalUtilized + parseFloat(amount_used);
+
+    if (newTotal > parseFloat(partnership.agreed_budget || 0)) {
+      return sendErrorResponse(res, 400, "Total fund utilization exceeds agreed budget", null, 'Add Fund Utilization');
+    }
+
+    // Process photos: convert base64 to files and save to uploads folder
+    const photosArray = Array.isArray(photos) ? photos : (photos ? [photos] : []);
+    const savedPhotoPaths = [];
+
+    for (const photo of photosArray) {
+      if (!photo) continue;
+      
+      try {
+        // Check if it's a base64 string
+        if (typeof photo === 'string' && photo.startsWith('data:image/')) {
+          // Extract base64 data and mime type
+          const matches = photo.match(/^data:image\/(\w+);base64,(.+)$/);
+          if (matches) {
+            const mimeType = matches[1];
+            const base64Data = matches[2];
+            const buffer = Buffer.from(base64Data, 'base64');
+            
+            // Generate unique filename
+            const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+            const extension = mimeType === 'jpeg' ? 'jpg' : mimeType;
+            const filename = `fund-util-${uniqueSuffix}.${extension}`;
+            const filePath = path.join('uploads', filename);
+            
+            // Ensure uploads directory exists
+            if (!fs.existsSync('uploads')) {
+              fs.mkdirSync('uploads', { recursive: true });
+            }
+            
+            // Write file to disk
+            fs.writeFileSync(filePath, buffer);
+            
+            // Store the path (accessible via /uploads/filename)
+            savedPhotoPaths.push(`/uploads/${filename}`);
+          } else {
+            // If it's already a URL/path, keep it as is
+            savedPhotoPaths.push(photo);
+          }
+        } else if (typeof photo === 'string' && (photo.startsWith('/uploads/') || photo.startsWith('http'))) {
+          // Already a file path or URL
+          savedPhotoPaths.push(photo);
+        }
+      } catch (error) {
+        console.error('Error saving photo:', error);
+        // Continue with other photos even if one fails
+      }
+    }
+
+    const result = await db.query(
+      `INSERT INTO fund_utilization (
+        partnership_id, project_id, corporate_user_id, ngo_user_id,
+        category, description, amount_used, utilization_date, photos
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      RETURNING *`,
+      [
+        partnershipId,
+        partnership.project_id,
+        partnership.corporate_user_id,
+        req.user.id,
+        category,
+        description,
+        parseFloat(amount_used),
+        utilization_date || new Date().toISOString().split('T')[0],
+        JSON.stringify(savedPhotoPaths)
+      ]
+    );
+
+    // Auto-update progress based on fund utilization
+    const updatedProgress = await updateProgressFromFundUtilization(partnershipId, partnership.project_id);
+
+    // Create notification for corporate
+    await createUserNotification({
+      userId: partnership.corporate_user_id,
+      userRole: 'corporate',
+      type: 'fund_utilization',
+      title: 'Fund Utilization Updated',
+      message: `NGO has utilized ₹${parseFloat(amount_used).toLocaleString('en-IN')} for ${category}`,
+      metadata: {
+        partnershipId,
+        projectId: partnership.project_id,
+        category,
+        amount: parseFloat(amount_used),
+        progress: updatedProgress,
+      },
+    });
+
+    // Convert photo paths to full URLs in response
+    const serverUrl = process.env.SERVER_URL || 'http://localhost:5000';
+    const utilizationResult = result.rows[0];
+    if (utilizationResult.photos) {
+      try {
+        const photos = typeof utilizationResult.photos === 'string' ? JSON.parse(utilizationResult.photos) : utilizationResult.photos;
+        utilizationResult.photos = photos.map(photo => {
+          if (photo && photo.startsWith('/uploads/')) {
+            return `${serverUrl}${photo}`;
+          }
+          return photo;
+        });
+      } catch (e) {
+        console.error('Error parsing photos:', e);
+      }
+    }
+
+    sendSuccessResponse(
+      res,
+      { 
+        utilization: utilizationResult,
+        updated_progress: updatedProgress
+      },
+      "Fund utilization added successfully",
+      'Add Fund Utilization'
+    );
+  } catch (error) {
+    sendErrorResponse(res, 500, "Failed to add fund utilization", error, 'Add Fund Utilization');
+  }
+});
+
+// Get Fund Utilization for Partnership
+app.get("/api/partnerships/:partnershipId/fund-utilization", authenticate, async (req, res) => {
+  try {
+    const { partnershipId } = req.params;
+
+    const partnership = await ensurePartnershipAccess(partnershipId, req.user.id);
+    if (!partnership) {
+      return sendErrorResponse(res, 404, "Partnership not found or you don't have permission", null, 'Get Fund Utilization');
+    }
+
+    const utilization = await db.query(
+      `SELECT fu.*, 
+              ap.agreed_budget,
+              COALESCE(SUM(fu.amount_used) OVER (PARTITION BY fu.partnership_id), 0) as total_utilized
+       FROM fund_utilization fu
+       JOIN active_partnerships ap ON fu.partnership_id = ap.id
+       WHERE fu.partnership_id = $1
+       ORDER BY fu.utilization_date DESC, fu.created_at DESC`,
+      [partnershipId]
+    );
+
+    // Convert photo paths to full URLs
+    const serverUrl = process.env.SERVER_URL || 'http://localhost:5000';
+    const utilizationWithUrls = utilization.rows.map(row => {
+      if (row.photos) {
+        try {
+          const photos = typeof row.photos === 'string' ? JSON.parse(row.photos) : row.photos;
+          row.photos = photos.map(photo => {
+            if (photo && photo.startsWith('/uploads/')) {
+              return `${serverUrl}${photo}`;
+            }
+            return photo;
+          });
+        } catch (e) {
+          console.error('Error parsing photos:', e);
+        }
+      }
+      return row;
+    });
+
+    const summary = await db.query(
+      `SELECT 
+        COALESCE(SUM(amount_used), 0) as total_utilized,
+        COUNT(*) as total_entries,
+        COALESCE(SUM(CASE WHEN category = 'infrastructure' THEN amount_used ELSE 0 END), 0) as infrastructure,
+        COALESCE(SUM(CASE WHEN category = 'staff' THEN amount_used ELSE 0 END), 0) as staff,
+        COALESCE(SUM(CASE WHEN category = 'materials' THEN amount_used ELSE 0 END), 0) as materials,
+        COALESCE(SUM(CASE WHEN category = 'operations' THEN amount_used ELSE 0 END), 0) as operations,
+        COALESCE(SUM(CASE WHEN category = 'other' THEN amount_used ELSE 0 END), 0) as other
+       FROM fund_utilization
+       WHERE partnership_id = $1`,
+      [partnershipId]
+    );
+
+    sendSuccessResponse(
+      res,
+      {
+        utilization: utilizationWithUrls,
+        summary: {
+          ...summary.rows[0],
+          agreed_budget: parseFloat(partnership.agreed_budget || 0),
+          remaining_budget: parseFloat(partnership.agreed_budget || 0) - parseFloat(summary.rows[0]?.total_utilized || 0),
+          utilization_percentage: partnership.agreed_budget > 0 
+            ? Math.round((parseFloat(summary.rows[0]?.total_utilized || 0) / parseFloat(partnership.agreed_budget)) * 100)
+            : 0
+        }
+      },
+      "Fund utilization retrieved successfully",
+      'Get Fund Utilization'
+    );
+  } catch (error) {
+    sendErrorResponse(res, 500, "Failed to retrieve fund utilization", error, 'Get Fund Utilization');
+  }
+});
+
+// Get Fund Utilization by Project (for both Corporate and NGO)
+app.get("/api/projects/:projectId/fund-utilization", authenticate, async (req, res) => {
+  try {
+    const { projectId } = req.params;
+
+    // Verify user has access to this project through a partnership
+    const partnership = await db.query(
+      `SELECT ap.* FROM active_partnerships ap
+       WHERE ap.project_id = $1 
+         AND (ap.corporate_user_id = $2 OR ap.ngo_user_id = $2)`,
+      [projectId, req.user.id]
+    );
+
+    if (partnership.rows.length === 0) {
+      return sendErrorResponse(res, 404, "Project not found or you don't have permission", null, 'Get Project Fund Utilization');
+    }
+
+    const partnershipIds = partnership.rows.map(p => p.id);
+
+    const utilization = await db.query(
+      `SELECT fu.*, 
+              ap.partnership_name,
+              ap.agreed_budget,
+              cpf.company_name as corporate_name,
+              np.organization_name as ngo_name
+       FROM fund_utilization fu
+       JOIN active_partnerships ap ON fu.partnership_id = ap.id
+       LEFT JOIN corporate_profiles cpf ON ap.corporate_user_id = cpf.user_id
+       LEFT JOIN ngo_profiles np ON ap.ngo_user_id = np.user_id
+       WHERE fu.partnership_id = ANY($1)
+       ORDER BY fu.utilization_date DESC, fu.created_at DESC`,
+      [partnershipIds]
+    );
+
+    const summary = await db.query(
+      `SELECT 
+        COALESCE(SUM(amount_used), 0) as total_utilized,
+        COUNT(*) as total_entries
+       FROM fund_utilization
+       WHERE partnership_id = ANY($1)`,
+      [partnershipIds]
+    );
+
+    // Convert photo paths to full URLs
+    const serverUrl = process.env.SERVER_URL || 'http://localhost:5000';
+    const utilizationWithUrls = utilization.rows.map(row => {
+      if (row.photos) {
+        try {
+          const photos = typeof row.photos === 'string' ? JSON.parse(row.photos) : row.photos;
+          row.photos = photos.map(photo => {
+            if (photo && photo.startsWith('/uploads/')) {
+              return `${serverUrl}${photo}`;
+            }
+            return photo;
+          });
+        } catch (e) {
+          console.error('Error parsing photos:', e);
+        }
+      }
+      return row;
+    });
+
+    sendSuccessResponse(
+      res,
+      {
+        utilization: utilizationWithUrls,
+        summary: summary.rows[0]
+      },
+      "Fund utilization retrieved successfully",
+      'Get Project Fund Utilization'
+    );
+  } catch (error) {
+    sendErrorResponse(res, 500, "Failed to retrieve fund utilization", error, 'Get Project Fund Utilization');
   }
 });
 

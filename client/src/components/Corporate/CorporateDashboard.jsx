@@ -47,6 +47,9 @@ import {
     PieChart as PieIcon,
     Calendar,
     Clock,
+    Bell,
+    History,
+    DollarSign,
 } from "lucide-react";
 
 const FOCUS_AREA_OPTIONS = [
@@ -102,17 +105,26 @@ import {
     getUserProfile,
     getCorporateDashboardStats,
     getCorporateProjects,
+    getCorporatePartnerships,
     updateCorporateProjectStatus,
-    getCorporateProjectMessages,
-    postCorporateProjectMessage,
     getCorporateRequests,
     createCorporateRequest,
     getCorporateConnections,
+    getCorporateBrowseNgos,
+    getCorporateNgoProfile,
     saveCorporateNgo,
     removeCorporateNgo,
     getCorporateActivity,
     logout,
+    getUserNotifications,
+    markUserNotificationRead,
+    markAllUserNotificationsRead,
+    getCorporateHistory,
 } from "../../services/api";
+import ChatDrawer from "../shared/ChatDrawer";
+import PartnerChatPanel from "../shared/PartnerChatPanel";
+import HistoryPage from "../shared/HistoryPage";
+import FundUtilizationView from "./FundUtilizationView";
 
 const PIE_COLORS = ["#6366f1", "#10b981", "#f59e0b", "#ef4444"];
 
@@ -157,6 +169,11 @@ const normalizeProject = (project) => {
     );
     return {
         id: String(project.id),
+        partnershipId:
+            project.partnership_id ??
+            project.partnershipId ??
+            project.active_partnership_id ??
+            null,
         name: project.name ?? project.title ?? "Project",
         ngo: project.ngo ?? project.ngo_name ?? project.partner_name ?? "",
         ngoId: project.ngo_id ?? project.partner_id ?? null,
@@ -171,6 +188,29 @@ const normalizeProject = (project) => {
         startDate: project.start_date ?? null,
         endDate: project.end_date ?? null,
         description: project.description ?? "",
+    };
+};
+
+const normalizePartnership = (record) => {
+    if (!record) return null;
+    const funds = Number(record.agreed_budget ?? record.project_budget ?? 0);
+    return {
+        id: String(record.project_id ?? record.id),
+        partnershipId: record.id ? String(record.id) : null,
+        name: record.project_name ?? record.partnership_name ?? "CSR Partnership",
+        ngo: record.ngo_name ?? "NGO Partner",
+        ngoId: record.ngo_user_id ?? null,
+        status: (record.status ?? "active").toLowerCase(),
+        category: record.focus_area ?? record.project_focus_area ?? "",
+        location: record.project_location ?? record.location ?? "N/A",
+        duration: record.duration_months ?? record.duration ?? 0,
+        funds,
+        fundsDisplay: formatCurrency(funds),
+        progress: Number(record.progress ?? 0),
+        beneficiaries: Number(record.beneficiaries_count ?? 0),
+        startDate: record.start_date ?? null,
+        endDate: record.end_date ?? null,
+        description: record.project_description ?? "",
     };
 };
 
@@ -315,16 +355,33 @@ export default function CorporateDashboard() {
 
     const [projects, setProjects] = useState([]);
     const [requests, setRequests] = useState([]);
-    const [projectMessages, setProjectMessages] = useState({});
     const [ngoDirectory, setNgoDirectory] = useState([]);
     const [shortlist, setShortlist] = useState([]);
     const [savedNgos, setSavedNgos] = useState([]);
     const [activityLog, setActivityLog] = useState([]);
+    const [partnershipProjects, setPartnershipProjects] = useState([]);
 
     const [viewProject, setViewProject] = useState(null);
-    const [messageModal, setMessageModal] = useState({ open: false, project: null });
+    const [viewFundUtilization, setViewFundUtilization] = useState(null);
     const [requestModal, setRequestModal] = useState({ open: false, ngo: null });
     const [selectedNgo, setSelectedNgo] = useState(null);
+    const [chatPanel, setChatPanel] = useState({
+        open: false,
+        partnershipId: null,
+        partnerName: "",
+        partnerSubtitle: "",
+        partnerAvatar: "",
+    });
+
+    const resetChatPanel = useCallback(() => {
+        setChatPanel({
+            open: false,
+            partnershipId: null,
+            partnerName: "",
+            partnerSubtitle: "",
+            partnerAvatar: "",
+        });
+    }, []);
 
     const [projectsQuery, setProjectsQuery] = useState("");
     const [projectsFilter, setProjectsFilter] = useState("all");
@@ -335,7 +392,85 @@ export default function CorporateDashboard() {
     const [connVerifiedOnly, setConnVerifiedOnly] = useState(false);
     const connectionsSearchRef = useRef(null);
 
-    const messageLoadTracker = useRef(new Set());
+    // Notification system
+    const [notifications, setNotifications] = useState([]);
+    const [notifOpen, setNotifOpen] = useState(false);
+    const [notifLoading, setNotifLoading] = useState(false);
+    const notifRef = useRef(null);
+    const bellRef = useRef(null);
+
+    const fetchNotifications = useCallback(async () => {
+        try {
+            setNotifLoading(true);
+            const response = await getUserNotifications({ limit: 50 });
+            const payload = Array.isArray(response?.notifications)
+                ? response.notifications
+                : response?.data?.notifications || [];
+            const normalized = payload.map((item) => ({
+                id: item.id,
+                type: item.type,
+                title: item.title,
+                message: item.message,
+                timestamp: item.created_at || item.timestamp,
+                read: Boolean(item.read || item.read_at),
+                metadata: item.metadata || {},
+            }));
+            setNotifications(normalized);
+        } catch (error) {
+            console.error("Failed to load notifications", error);
+        } finally {
+            setNotifLoading(false);
+        }
+    }, []);
+
+    const markAsRead = useCallback(async (id) => {
+        try {
+            await markUserNotificationRead(id);
+            setNotifications((prev) =>
+                prev.map((n) => (n.id === id ? { ...n, read: true } : n))
+            );
+        } catch (error) {
+            console.error("Failed to mark notification read", error);
+        }
+    }, []);
+
+    const markAllAsRead = useCallback(async () => {
+        try {
+            await markAllUserNotificationsRead();
+            setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+        } catch (error) {
+            console.error("Failed to mark notifications read", error);
+        }
+    }, []);
+
+    const unreadCount = useMemo(() => {
+        return notifications.filter((n) => !n.read).length;
+    }, [notifications]);
+
+    // Handle click outside notification dropdown
+    useEffect(() => {
+        function handleClickOutside(event) {
+            if (
+                notifRef.current &&
+                !notifRef.current.contains(event.target) &&
+                bellRef.current &&
+                !bellRef.current.contains(event.target)
+            ) {
+                setNotifOpen(false);
+            }
+        }
+
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => {
+            document.removeEventListener("mousedown", handleClickOutside);
+        };
+    }, []);
+
+    useEffect(() => {
+        fetchNotifications();
+        const interval = setInterval(fetchNotifications, 15000);
+        return () => clearInterval(interval);
+    }, [fetchNotifications]);
 
     const showAlert = useCallback((text, kind = "info") => {
         setAlert({ text, kind, id: Date.now() });
@@ -385,6 +520,7 @@ export default function CorporateDashboard() {
                 getCorporateDashboardStats(),
                 getCorporateProjects(),
                 getCorporateRequests(),
+                getCorporatePartnerships(),
                 getCorporateConnections(),
                 getCorporateConnections({ shortlist: true }),
                 getCorporateActivity(),
@@ -408,15 +544,20 @@ export default function CorporateDashboard() {
             const requestsData = extractArray(settledValue(results[3]), "requests").map(normalizeRequest).filter(Boolean);
             setRequests(requestsData);
 
-            const directoryData = extractArray(settledValue(results[4]), "ngos").map(normalizeNgo).filter(Boolean);
+            const partnershipsData = extractArray(settledValue(results[4]), "partnerships")
+                .map(normalizePartnership)
+                .filter(Boolean);
+            setPartnershipProjects(partnershipsData);
+
+            const directoryData = extractArray(settledValue(results[5]), "ngos").map(normalizeNgo).filter(Boolean);
             setNgoDirectory(directoryData);
 
-            const shortlistDataRaw = extractArray(settledValue(results[5]), "ngos").map(normalizeNgo).filter(Boolean);
+            const shortlistDataRaw = extractArray(settledValue(results[6]), "ngos").map(normalizeNgo).filter(Boolean);
             const shortlistData = dedupeByNgo(shortlistDataRaw);
             setShortlist(shortlistData);
             setSavedNgos(shortlistData.map((ngo) => ngo.ngoId).filter(Boolean));
 
-            const activityData = extractArray(settledValue(results[6]), "entries")
+            const activityData = extractArray(settledValue(results[7]), "entries")
                 .map(normalizeActivity)
                 .filter(Boolean);
             setActivityLog(activityData);
@@ -454,36 +595,6 @@ export default function CorporateDashboard() {
             showAlert(`Unable to refresh shortlist: ${error.message}`, "error");
         }
     }, [dedupeByNgo, showAlert]);
-
-    const ensureProjectMessages = useCallback(
-        async (projectId) => {
-            if (!projectId || projectMessages[projectId] || messageLoadTracker.current.has(projectId)) {
-                return;
-            }
-            messageLoadTracker.current.add(projectId);
-            try {
-                const response = await getCorporateProjectMessages(projectId);
-                const messages = extractArray(response, "messages").map(normalizeMessage).filter(Boolean);
-                setProjectMessages((prev) => ({ ...prev, [projectId]: messages }));
-            } catch (error) {
-                console.error("Failed to load project messages", error);
-            } finally {
-                messageLoadTracker.current.delete(projectId);
-            }
-        },
-        [projectMessages]
-    );
-
-    const activeMessageProjectId = useMemo(
-        () => messageModal.project?.id ?? viewProject?.id ?? null,
-        [messageModal.project, viewProject]
-    );
-
-    useEffect(() => {
-        if (activeMessageProjectId) {
-            ensureProjectMessages(activeMessageProjectId);
-        }
-    }, [activeMessageProjectId, ensureProjectMessages]);
 
     const pendingRequests = useMemo(
         () => requests.filter((req) => req.status === "Pending"),
@@ -573,6 +684,41 @@ export default function CorporateDashboard() {
         });
     }, [ngoDirectory, connSearchQuery, connFocusFilter, connVerifiedOnly]);
 
+    const chatEligibleProjects = useMemo(
+        () => projects.filter((project) => Boolean(project.partnershipId)),
+        [projects]
+    );
+
+    const chatProjects = useMemo(() => {
+        const byPartnership = new Map();
+        chatEligibleProjects.forEach((project) => {
+            if (project.partnershipId) {
+                byPartnership.set(project.partnershipId, project);
+            }
+        });
+        partnershipProjects.forEach((project) => {
+            if (project.partnershipId && !byPartnership.has(project.partnershipId)) {
+                byPartnership.set(project.partnershipId, project);
+            }
+        });
+        return Array.from(byPartnership.values());
+    }, [chatEligibleProjects, partnershipProjects]);
+
+    const corporateChatItems = useMemo(
+        () =>
+            chatProjects.map((project) => ({
+                id: project.partnershipId || project.id,
+                partnerName: project.ngo || "NGO Partner",
+                projectName: project.name,
+                location: project.location || "Location TBA",
+                fundsDisplay: project.fundsDisplay,
+                progress: project.progress || 0,
+                partnershipId: project.partnershipId,
+                raw: project,
+            })),
+        [chatProjects]
+    );
+
     const toggleSidebarPinned = () => {
         setSidebarPinned((prev) => {
             const next = !prev;
@@ -602,22 +748,36 @@ export default function CorporateDashboard() {
         }
     };
 
-    const sendProjectMessage = async (projectId, text) => {
-        if (!text.trim()) return;
-        try {
-            const response = await postCorporateProjectMessage(projectId, { text });
-            const message = normalizeMessage(extractValue(response, "message")) ?? normalizeMessage(response);
-            setProjectMessages((prev) => ({
-                ...prev,
-                [projectId]: [message, ...(prev[projectId] || [])].filter(Boolean),
-            }));
-            appendActivity("Message sent to project partner", "✉️");
-            showAlert("Message sent", "success");
-        } catch (error) {
-            console.error("Failed to send project message", error);
-            showAlert(`Unable to send message: ${error.message}`, "error");
-        }
-    };
+    const openChatWithProject = useCallback(
+        (project) => {
+            if (!project) return;
+            const partnershipId =
+                project.partnershipId ||
+                project.partnership_id ||
+                project.active_partnership_id ||
+                null;
+            if (!partnershipId) {
+                showAlert("Chat is unavailable for this project yet.", "error");
+                return;
+            }
+            const initials = project.ngo
+                ? project.ngo
+                      .split(" ")
+                      .map((word) => word[0])
+                      .slice(0, 2)
+                      .join("")
+                      .toUpperCase()
+                : "";
+            setChatPanel({
+                open: true,
+                partnershipId,
+                partnerName: project.ngo || "Partner",
+                partnerSubtitle: project.name,
+                partnerAvatar: initials,
+            });
+        },
+        [showAlert]
+    );
 
     const updateProjectStatus = async (projectId, payload, successText, activityText) => {
         try {
@@ -646,13 +806,16 @@ export default function CorporateDashboard() {
     const restoreProject = (projectId) =>
         updateProjectStatus(projectId, { status: "active" }, "Project restored", "Project restored");
 
-    const sendRequest = async ({ ngo, amount, message, focusArea }) => {
+    const sendRequest = async ({ ngo, amount, message }) => {
         try {
+            // Automatically use project's focus area or NGO's primary focus area
+            const focusArea = ngo.project?.focusAreas?.[0] || ngo.focusAreas?.[0] || null;
+            
             const response = await createCorporateRequest({
                 ngo_id: ngo.ngoId,
                 project_id: ngo.project?.id,
                 amount,
-                focus_area: focusArea || (ngo.project?.focusAreas?.[0] ?? null),
+                focus_area: focusArea ? normalizeFocusAreaValue(focusArea) : null,
                 message,
                 description: message || ngo.project?.description || null,
             });
@@ -660,6 +823,7 @@ export default function CorporateDashboard() {
             if (created) {
                 setRequests((prev) => [created, ...prev]);
                 appendActivity(`Request sent to ${created.ngo}`, "📤");
+                fetchNotifications();
                 refreshStats();
             }
             showAlert("Request sent", "success");
@@ -963,7 +1127,7 @@ export default function CorporateDashboard() {
                                         </div>
                                         <div className="mt-3 flex gap-2">
                                             <button
-                                                onClick={() => setMessageModal({ open: true, project })}
+                                                onClick={() => openChatWithProject(project)}
                                                 className="px-3 py-1 rounded-md bg-indigo-600 text-white text-xs flex items-center gap-2"
                                             >
                                                 <MessageCircle size={14} />
@@ -1232,7 +1396,7 @@ export default function CorporateDashboard() {
                                             View
                                         </button>
                                         <button
-                                            onClick={() => setMessageModal({ open: true, project })}
+                                            onClick={() => openChatWithProject(project)}
                                             className="px-3 py-1 rounded-md bg-indigo-600 text-white hover:bg-indigo-500 flex items-center gap-2 text-sm"
                                         >
                                             <MessageCircle size={16} />
@@ -1644,9 +1808,50 @@ export default function CorporateDashboard() {
             }));
 
         const totalFunds = portfolioRows.reduce((sum, row) => sum + row.funds, 0);
+        
+        // Fund Utilization Metrics
+        const totalCommittedFunds = useMemo(() => {
+            return partnershipProjects.reduce((sum, p) => sum + (Number(p.agreed_budget || p.funds || 0)), 0);
+        }, [partnershipProjects]);
+        
+        const totalUtilizedFunds = useMemo(() => {
+            return partnershipProjects.reduce((sum, p) => sum + (Number(p.total_funds_utilized || p.total_utilized || 0)), 0);
+        }, [partnershipProjects]);
+        
+        const totalRemainingFunds = totalCommittedFunds - totalUtilizedFunds;
+        const utilizationPercentage = totalCommittedFunds > 0 
+            ? Math.round((totalUtilizedFunds / totalCommittedFunds) * 100)
+            : 0;
 
         return (
             <div className="space-y-6">
+                {/* Fund Utilization Summary Cards */}
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div className="card-base p-5 bg-white border border-indigo-50 rounded-2xl shadow-sm">
+                        <p className="text-xs text-slate-500 mb-1">Total Committed</p>
+                        <h3 className="text-2xl font-extrabold text-emerald-600">
+                            {formatCurrency(totalCommittedFunds)}
+                        </h3>
+                    </div>
+                    <div className="card-base p-5 bg-white border border-indigo-50 rounded-2xl shadow-sm">
+                        <p className="text-xs text-slate-500 mb-1">Total Utilized</p>
+                        <h3 className="text-2xl font-extrabold text-indigo-600">
+                            {formatCurrency(totalUtilizedFunds)}
+                        </h3>
+                    </div>
+                    <div className="card-base p-5 bg-white border border-indigo-50 rounded-2xl shadow-sm">
+                        <p className="text-xs text-slate-500 mb-1">Remaining</p>
+                        <h3 className="text-2xl font-extrabold text-amber-600">
+                            {formatCurrency(totalRemainingFunds)}
+                        </h3>
+                    </div>
+                    <div className="card-base p-5 bg-white border border-indigo-50 rounded-2xl shadow-sm">
+                        <p className="text-xs text-slate-500 mb-1">Utilization %</p>
+                        <h3 className="text-2xl font-extrabold text-blue-600">
+                            {utilizationPercentage}%
+                        </h3>
+                    </div>
+                </div>
                 <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     <div className="card-base p-5 bg-white border border-indigo-50 rounded-2xl shadow-sm">
                         <div className="font-semibold mb-3 text-slate-800 flex items-center gap-2">
@@ -1903,7 +2108,6 @@ export default function CorporateDashboard() {
 
     function ViewProjectModal({ project, onClose }) {
         if (!project) return null;
-        const messages = projectMessages[project.id] || [];
         return (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
                 <div className="absolute inset-0 bg-black/30" onClick={onClose} />
@@ -1950,32 +2154,33 @@ export default function CorporateDashboard() {
                                 <div className="text-sm font-medium">{project.progress}%</div>
                             </div>
 
-                            <div className="mt-4">
+                            <div className="mt-4 space-y-3">
                                 <div className="flex items-center justify-between">
-                                    <h4 className="text-sm font-semibold text-slate-700">Message History</h4>
+                                    <h4 className="text-sm font-semibold text-slate-700">Partner Chat</h4>
                                     <button
-                                        onClick={() => setMessageModal({ open: true, project })}
+                                        onClick={() => openChatWithProject(project)}
                                         className="px-3 py-1 rounded-md bg-indigo-600 text-white text-sm flex items-center gap-2"
                                     >
                                         <MessageCircle size={16} />
-                                        Message Partner
+                                        Open Chat
                                     </button>
                                 </div>
-                                {messages.length === 0 ? (
-                                    <p className="text-sm text-slate-500 mt-2">No messages yet.</p>
-                                ) : (
-                                    <ul className="mt-2 space-y-2 text-sm">
-                                        {messages.map((msg) => (
-                                            <li key={msg.id} className="border border-slate-100 rounded-lg p-3 bg-slate-50">
-                                                <div className="font-medium text-slate-700">{msg.author}</div>
-                                                <div className="text-slate-600">{msg.text}</div>
-                                                <div className="text-xs text-slate-400 mt-1">
-                                                    {new Date(msg.timestamp).toLocaleString("en-IN")}
-                                                </div>
-                                            </li>
-                                        ))}
-                                    </ul>
-                                )}
+                                <p className="text-xs text-slate-400 mt-2">
+                                    Use chat to stay in sync with your NGO partner.
+                                </p>
+                                
+                                <div className="border-t pt-3">
+                                    <button
+                                        onClick={() => setViewFundUtilization(project.id)}
+                                        className="w-full px-3 py-2 rounded-md bg-emerald-600 text-white text-sm flex items-center justify-center gap-2 hover:bg-emerald-700"
+                                    >
+                                        <DollarSign size={16} />
+                                        View Fund Utilization
+                                    </button>
+                                    <p className="text-xs text-slate-400 mt-2 text-center">
+                                        See how funds are being utilized for this project
+                                    </p>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -2019,7 +2224,7 @@ export default function CorporateDashboard() {
                             </>
                         )}
                         <button
-                            onClick={() => setMessageModal({ open: true, project })}
+                            onClick={() => openChatWithProject(project)}
                             className="px-4 py-2 rounded-md bg-indigo-600 text-white flex items-center gap-2"
                         >
                             <MessageCircle size={16} />
@@ -2034,80 +2239,8 @@ export default function CorporateDashboard() {
         );
     }
 
-    function ProjectMessageModal({ current, onClose }) {
-        const [text, setText] = useState("");
-        const messages = projectMessages[current?.id] || [];
-
-        if (!current) return null;
-
-        const handleSubmit = async (e) => {
-            e.preventDefault();
-            await sendProjectMessage(current.id, text);
-            setText("");
-            onClose();
-        };
-
-        return (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-                <div className="absolute inset-0 bg-black/30" onClick={onClose} />
-                <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-lg p-6 z-10">
-                    <div className="flex items-center justify-between mb-4">
-                        <h3 className="font-semibold text-slate-800">
-                            Message {current.ngo} — {current.name}
-                        </h3>
-                        <button onClick={onClose}>
-                            <X size={18} />
-                        </button>
-                    </div>
-                    <form onSubmit={handleSubmit} className="space-y-4">
-                        <textarea
-                            value={text}
-                            onChange={(e) => setText(e.target.value)}
-                            className="w-full border rounded-lg p-3 min-h-[150px] focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
-                            placeholder="Share an update, request documents, or schedule a check-in..."
-                        />
-                        <div className="flex justify-end gap-2">
-                            <button
-                                type="button"
-                                onClick={onClose}
-                                className="px-3 py-2 bg-slate-100 rounded"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                type="submit"
-                                className="px-3 py-2 bg-indigo-600 text-white rounded flex items-center gap-2 disabled:opacity-60"
-                                disabled={!text.trim()}
-                            >
-                                <Send size={16} />
-                                Send Message
-                            </button>
-                        </div>
-                    </form>
-                    {messages.length > 0 && (
-                        <div className="mt-4 space-y-2 max-h-48 overflow-y-auto">
-                            {messages.map((msg) => (
-                                <div key={msg.id} className="border border-slate-100 rounded-lg p-3 bg-slate-50">
-                                    <div className="text-sm text-slate-600">{msg.text}</div>
-                                    <div className="text-xs text-slate-400 mt-1">
-                                        {new Date(msg.timestamp).toLocaleString("en-IN")}
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
-            </div>
-        );
-    }
-
     function SendRequestModal({ ngo, onClose }) {
         const [amount, setAmount] = useState("");
-        const initialFocusArea =
-            (ngo?.focusAreas || [])
-                .map((area) => normalizeFocusAreaValue(area))
-                .find((value) => value && value !== "general") || "";
-        const [focusArea, setFocusArea] = useState(initialFocusArea);
         const [message, setMessage] = useState("");
 
         if (!ngo) return null;
@@ -2119,7 +2252,7 @@ export default function CorporateDashboard() {
                 showAlert("Please provide a valid funding amount.", "error");
                 return;
             }
-            await sendRequest({ ngo, amount: numericAmount, message, focusArea });
+            await sendRequest({ ngo, amount: numericAmount, message });
             setAmount("");
             setMessage("");
             onClose();
@@ -2171,29 +2304,6 @@ export default function CorporateDashboard() {
                         </div>
 
                         <div>
-                            <label className="text-xs text-slate-500 block mb-1">Focus Area</label>
-                            <select
-                                value={focusArea}
-                                onChange={(e) => setFocusArea(e.target.value)}
-                                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                            >
-                                {(ngo.focusAreas || [])
-                                    .filter((area) => area && normalizeFocusAreaValue(area) !== "general")
-                                    .map((area) => (
-                                        <option key={area} value={normalizeFocusAreaValue(area)}>
-                                            {getFocusAreaLabel(area)}
-                                        </option>
-                                    ))}
-                                {(!ngo.focusAreas ||
-                                    ngo.focusAreas.filter(
-                                        (area) => normalizeFocusAreaValue(area) !== "general"
-                                    ).length === 0) && (
-                                    <option value="">Not specified</option>
-                                )}
-                            </select>
-                        </div>
-
-                        <div>
                             <label className="text-xs text-slate-500 block mb-1">
                                 Message / Objective
                             </label>
@@ -2228,24 +2338,61 @@ export default function CorporateDashboard() {
     }
 
     function NgoProfileModal({ ngo, onClose }) {
+        const [fullProfile, setFullProfile] = useState(null);
+        const [loading, setLoading] = useState(true);
+        const [error, setError] = useState(null);
+
+        useEffect(() => {
+            if (ngo?.ngoId) {
+                const fetchProfile = async () => {
+                    try {
+                        setLoading(true);
+                        setError(null);
+                        const response = await getCorporateNgoProfile(ngo.ngoId);
+                        if (response.success && response.data) {
+                            setFullProfile(response.data);
+                        } else {
+                            setError("Failed to load profile");
+                        }
+                    } catch (err) {
+                        console.error("Error fetching NGO profile:", err);
+                        setError(err.message || "Failed to load profile");
+                    } finally {
+                        setLoading(false);
+                    }
+                };
+                fetchProfile();
+            } else {
+                setLoading(false);
+            }
+        }, [ngo?.ngoId]);
+
         if (!ngo) return null;
+
+        const displayNgo = fullProfile?.ngo || ngo;
+        const projects = fullProfile?.projects || (ngo.project ? [ngo.project] : []);
+
         return (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
                 <div className="absolute inset-0 bg-black/30" onClick={onClose} />
-                <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-3xl p-6 z-10 space-y-4">
+                <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto p-6 z-10 space-y-4">
                     <div className="flex items-start justify-between gap-4">
                         <div className="flex items-start gap-4">
                             <img
-                                src={ngo.logo}
-                                alt={ngo.name}
+                                src={displayNgo.logo || displayNgo.logo_path || ngo.logo}
+                                alt={displayNgo.organization_name || displayNgo.name || ngo.name}
                                 className="w-16 h-16 rounded-xl object-cover border border-slate-200"
                             />
                             <div>
-                                <h3 className="text-xl font-semibold text-slate-800">{ngo.name}</h3>
-                                <p className="text-sm text-slate-500">{ngo.tagline}</p>
+                                <h3 className="text-xl font-semibold text-slate-800">
+                                    {displayNgo.organization_name || displayNgo.name || ngo.name}
+                                </h3>
+                                <p className="text-sm text-slate-500">
+                                    {displayNgo.tagline || ngo.tagline || ""}
+                                </p>
                                 <div className="flex items-center gap-3 text-xs text-slate-400 mt-2">
                                     <MapPin size={14} />
-                                    {ngo.location}
+                                    {displayNgo.location || displayNgo.city || ngo.location || "Location not specified"}
                                 </div>
                             </div>
                         </div>
@@ -2254,39 +2401,66 @@ export default function CorporateDashboard() {
                         </button>
                     </div>
 
-                    <p className="text-sm text-slate-600">
-                        {ngo.description || "Partner NGO working towards impactful initiatives."}
-                    </p>
-
-                    {ngo.project && (
-                        <div className="border border-slate-100 rounded-xl p-5 bg-slate-50/60 space-y-3">
-                            <div>
-                                <div className="text-base font-semibold text-slate-800">
-                                    {ngo.project.name}
-                                </div>
-                                <div className="mt-1 flex flex-wrap gap-3 text-xs text-slate-500">
-                                    <div className="flex items-center gap-1.5">
-                                        <HandCoins size={14} className="text-indigo-500" />
-                                        <span className="font-medium text-slate-700">{ngo.project.fundsDisplay}</span>
-                                    </div>
-                                    <div className="flex items-center gap-1.5">
-                                        <Users size={14} className="text-indigo-500" />
-                                        <span>
-                                            {ngo.project.beneficiaries.toLocaleString("en-IN")} beneficiaries
-                                        </span>
-                                    </div>
-                                    {ngo.project.durationMonths ? (
-                                        <div className="flex items-center gap-1.5">
-                                            <Clock size={14} className="text-indigo-500" />
-                                            <span>{ngo.project.durationMonths} mo</span>
-                                        </div>
-                                    ) : null}
-                                </div>
+                    {loading ? (
+                        <div className="flex items-center justify-center py-8">
+                            <div className="text-center">
+                                <div className="inline-block w-8 h-8 mb-2 border-b-2 border-indigo-600 rounded-full animate-spin"></div>
+                                <p className="text-sm text-slate-500">Loading profile...</p>
                             </div>
-                            <p className="text-sm text-slate-600 leading-relaxed">
-                                {ngo.project.description || "No public description shared yet."}
-                            </p>
                         </div>
+                    ) : error ? (
+                        <div className="p-4 rounded-lg bg-red-50 border border-red-200">
+                            <p className="text-sm text-red-700">{error}</p>
+                        </div>
+                    ) : (
+                        <>
+                            <p className="text-sm text-slate-600">
+                                {displayNgo.description || displayNgo.about || "Partner NGO working towards impactful initiatives."}
+                            </p>
+
+                            {projects && projects.length > 0 && (
+                                <div className="space-y-3">
+                                    <h4 className="text-sm font-semibold text-slate-700 uppercase tracking-wide">
+                                        Open Projects ({projects.length})
+                                    </h4>
+                                    {projects.map((project) => (
+                                        <div key={project.id} className="border border-slate-100 rounded-xl p-5 bg-slate-50/60 space-y-3">
+                                            <div>
+                                                <div className="text-base font-semibold text-slate-800">
+                                                    {project.name || project.title}
+                                                </div>
+                                                <div className="mt-1 flex flex-wrap gap-3 text-xs text-slate-500">
+                                                    {project.budget_display && (
+                                                        <div className="flex items-center gap-1.5">
+                                                            <HandCoins size={14} className="text-indigo-500" />
+                                                            <span className="font-medium text-slate-700">{project.budget_display}</span>
+                                                        </div>
+                                                    )}
+                                                    {project.beneficiaries_count && (
+                                                        <div className="flex items-center gap-1.5">
+                                                            <Users size={14} className="text-indigo-500" />
+                                                            <span>
+                                                                {project.beneficiaries_count.toLocaleString("en-IN")} beneficiaries
+                                                            </span>
+                                                        </div>
+                                                    )}
+                                                    {project.focus_area && (
+                                                        <div className="px-2 py-1 rounded-md bg-indigo-100 text-indigo-700 text-xs">
+                                                            {getFocusAreaLabel(project.focus_area)}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            {project.description && (
+                                                <p className="text-sm text-slate-600 leading-relaxed line-clamp-3">
+                                                    {project.description}
+                                                </p>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </>
                     )}
 
                     <div className="grid gap-4 sm:grid-cols-3 text-sm text-slate-600">
@@ -2294,12 +2468,12 @@ export default function CorporateDashboard() {
                             <p className="text-xs font-semibold uppercase text-slate-400 mb-1">Email</p>
                             <div className="flex items-center gap-2">
                                 <Mail size={16} className="text-indigo-500 shrink-0" />
-                                {ngo.contact?.email ? (
+                                {displayNgo.email || displayNgo.contact_email ? (
                                     <a
-                                        href={`mailto:${ngo.contact.email}`}
+                                        href={`mailto:${displayNgo.email || displayNgo.contact_email}`}
                                         className="text-indigo-600 hover:underline break-all"
                                     >
-                                        {ngo.contact.email}
+                                        {displayNgo.email || displayNgo.contact_email}
                                     </a>
                                 ) : (
                                     <span>Not provided</span>
@@ -2310,12 +2484,12 @@ export default function CorporateDashboard() {
                             <p className="text-xs font-semibold uppercase text-slate-400 mb-1">Phone</p>
                             <div className="flex items-center gap-2">
                                 <Phone size={16} className="text-indigo-500 shrink-0" />
-                                {ngo.contact?.phone ? (
+                                {displayNgo.phone || displayNgo.contact_phone ? (
                                     <a
-                                        href={`tel:${ngo.contact.phone}`}
+                                        href={`tel:${displayNgo.phone || displayNgo.contact_phone}`}
                                         className="text-slate-600 hover:text-indigo-600"
                                     >
-                                        {ngo.contact.phone}
+                                        {displayNgo.phone || displayNgo.contact_phone}
                                     </a>
                                 ) : (
                                     <span>Not provided</span>
@@ -2326,14 +2500,14 @@ export default function CorporateDashboard() {
                             <p className="text-xs font-semibold uppercase text-slate-400 mb-1">Website</p>
                             <div className="flex items-center gap-2">
                                 <Globe size={16} className="text-indigo-500 shrink-0" />
-                                {ngo.website ? (
+                                {displayNgo.website ? (
                                     <a
-                                        href={ngo.website.startsWith("http") ? ngo.website : `https://${ngo.website}`}
+                                        href={displayNgo.website.startsWith("http") ? displayNgo.website : `https://${displayNgo.website}`}
                                         target="_blank"
                                         rel="noreferrer"
                                         className="text-indigo-600 hover:underline break-all"
                                     >
-                                        {ngo.website.replace(/^https?:\/\//, "")}
+                                        {displayNgo.website.replace(/^https?:\/\//, "")}
                                     </a>
                                 ) : (
                                     <span>Not provided</span>
@@ -2342,17 +2516,27 @@ export default function CorporateDashboard() {
                         </div>
                     </div>
 
+                    {fullProfile?.hasPendingRequest && (
+                        <div className="p-3 rounded-lg bg-amber-50 border border-amber-200">
+                            <p className="text-sm text-amber-700">
+                                ⚠️ You already have a pending request to this NGO
+                            </p>
+                        </div>
+                    )}
+
                     <div className="flex justify-end gap-2">
-                        <button
-                            onClick={() => {
-                                setRequestModal({ open: true, ngo });
-                                onClose();
-                            }}
-                            className="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-500 flex items-center gap-2"
-                        >
-                            <Send size={16} />
-                            Send Request
-                        </button>
+                        {!fullProfile?.hasPendingRequest && (
+                            <button
+                                onClick={() => {
+                                    setRequestModal({ open: true, ngo: displayNgo });
+                                    onClose();
+                                }}
+                                className="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-500 flex items-center gap-2"
+                            >
+                                <Send size={16} />
+                                Send Request
+                            </button>
+                        )}
                         <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm bg-slate-100">
                             Close
                         </button>
@@ -2368,6 +2552,8 @@ export default function CorporateDashboard() {
         { id: "funding", label: "Funding", icon: HandCoins },
         { id: "projects", label: "Projects", icon: FolderKanban },
         { id: "connections", label: "Connections", icon: Users },
+        { id: "chat", label: "Partner Chat", icon: MessageCircle },
+        { id: "history", label: "History", icon: History },
         { id: "reports", label: "Reports", icon: FileText },
         { id: "settings", label: "Settings", icon: SettingsIcon },
     ];
@@ -2378,6 +2564,22 @@ export default function CorporateDashboard() {
         funding: <FundingPage />,
         projects: <ProjectsPage />,
         connections: <ConnectionsPage />,
+        chat: (
+            <PartnerChatPanel
+                title="Partner Chat"
+                subtitle="Stay in sync with your NGOs"
+                items={corporateChatItems}
+                onOpenChat={(item) => openChatWithProject(item.raw)}
+                onViewDetails={(item) => setViewProject(item.raw)}
+                emptyState={{
+                    title: "No chat-ready partnerships",
+                    description: "Create or activate a partnership to start messaging your NGO partners.",
+                }}
+                primaryActionLabel="Open Chat"
+                secondaryActionLabel="View project"
+            />
+        ),
+        history: <HistoryPage fetchHistory={getCorporateHistory} userRole="corporate" />,
         reports: <ReportsPage />,
         settings: <SettingsPage />,
     };
@@ -2492,6 +2694,118 @@ export default function CorporateDashboard() {
                             </p>
                         </div>
 
+                        {/* Notification Bell */}
+                        <div className="relative">
+                            <button
+                                ref={bellRef}
+                                onClick={() => setNotifOpen(!notifOpen)}
+                                className="p-2 bg-white border rounded-lg shadow-sm hover:shadow-md relative"
+                            >
+                                <Bell size={20} />
+                                {unreadCount > 0 && (
+                                    <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center">
+                                        {unreadCount > 9 ? '9+' : unreadCount}
+                                    </span>
+                                )}
+                            </button>
+
+                            {notifOpen && (
+                                <div
+                                    ref={notifRef}
+                                    className="absolute right-0 mt-2 w-80 bg-white rounded-xl shadow-lg border z-50"
+                                >
+                                    <div className="p-4 border-b flex items-center justify-between">
+                                        <h4 className="font-semibold text-slate-700">Notifications</h4>
+                                        {unreadCount > 0 && (
+                                            <button
+                                                onClick={markAllAsRead}
+                                                className="text-xs text-indigo-600 hover:text-indigo-700"
+                                            >
+                                                Mark all as read
+                                            </button>
+                                        )}
+                                    </div>
+
+                                    <div className="max-h-96 overflow-y-auto">
+                                        {notifLoading ? (
+                                            <div className="p-6 text-center text-slate-500 text-sm">
+                                                <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin text-indigo-600" />
+                                                Loading notifications...
+                                            </div>
+                                        ) : notifications.length === 0 ? (
+                                            <div className="p-6 text-center">
+                                                <Bell size={32} className="mx-auto text-slate-300 mb-2" />
+                                                <p className="text-sm text-slate-500">No notifications yet</p>
+                                            </div>
+                                        ) : (
+                                            <div className="divide-y">
+                                                {notifications.slice(0, 20).map((n) => {
+                                                    const isRead = n.read;
+                                                    const getIcon = () => {
+                                                        switch(n.type) {
+                                                            case 'accepted': return '✅';
+                                                            case 'rejected': return '❌';
+                                                            case 'meeting': return '📅';
+                                                            case 'message': return '✉️';
+                                                            case 'fund': return '💰';
+                                                            case 'request': return '📤';
+                                                            case 'partnership': return '🤝';
+                                                            default: return 'ℹ️';
+                                                        }
+                                                    };
+                                                    const getColor = () => {
+                                                        switch(n.type) {
+                                                            case 'accepted': return 'bg-green-50 border-green-200';
+                                                            case 'rejected': return 'bg-red-50 border-red-200';
+                                                            case 'meeting': return 'bg-blue-50 border-blue-200';
+                                                            case 'message': return 'bg-purple-50 border-purple-200';
+                                                            case 'fund': return 'bg-yellow-50 border-yellow-200';
+                                                            case 'request': return 'bg-indigo-50 border-indigo-200';
+                                                            case 'partnership': return 'bg-teal-50 border-teal-200';
+                                                            default: return 'bg-slate-50 border-slate-200';
+                                                        }
+                                                    };
+                                                    const timeAgo = (timestamp) => {
+                                                        const now = new Date();
+                                                        const past = new Date(timestamp);
+                                                        const diffMs = now - past;
+                                                        const diffMins = Math.floor(diffMs / 60000);
+                                                        const diffHours = Math.floor(diffMs / 3600000);
+                                                        const diffDays = Math.floor(diffMs / 86400000);
+                                                        if (diffMins < 1) return 'Just now';
+                                                        if (diffMins < 60) return `${diffMins}m ago`;
+                                                        if (diffHours < 24) return `${diffHours}h ago`;
+                                                        return `${diffDays}d ago`;
+                                                    };
+                                                    return (
+                                                        <div
+                                                            key={n.id}
+                                                            onClick={() => markAsRead(n.id)}
+                                                            className={`p-3 cursor-pointer transition-colors ${isRead ? 'bg-white' : getColor()} hover:bg-slate-50`}
+                                                        >
+                                                            <div className="flex items-start gap-3">
+                                                                <span className="text-lg">{getIcon()}</span>
+                                                                <div className="flex-1 min-w-0">
+                                                                    <p className={`font-medium text-sm ${isRead ? 'text-slate-600' : 'text-slate-800'}`}>
+                                                                        {n.title}
+                                                                    </p>
+                                                                    <p className="text-xs text-slate-500 mt-1">{n.message}</p>
+                                                                    <p className="text-[10px] text-slate-400 mt-1">{timeAgo(n.timestamp)}</p>
+                                                                </div>
+                                                                {!isRead && (
+                                                                    <span className="w-2 h-2 bg-indigo-500 rounded-full mt-1.5"></span>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
                         <div className="relative flex items-center gap-3 bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 rounded-full px-4 py-2 shadow-md">
                             <CheckCircle2 size={22} className="text-emerald-600" />
                             <div className="flex flex-col leading-tight">
@@ -2542,12 +2856,20 @@ export default function CorporateDashboard() {
                 <ViewProjectModal project={viewProject} onClose={() => setViewProject(null)} />
             )}
 
-            {messageModal.open && messageModal.project && (
-                <ProjectMessageModal
-                    current={messageModal.project}
-                    onClose={() => setMessageModal({ open: false, project: null })}
-                />
+            {viewFundUtilization && (
+                <FundUtilizationView projectId={viewFundUtilization} onClose={() => setViewFundUtilization(null)} />
             )}
+
+            <ChatDrawer
+                open={chatPanel.open}
+                onClose={resetChatPanel}
+                partnershipId={chatPanel.partnershipId}
+                partnerName={chatPanel.partnerName}
+                partnerSubtitle={chatPanel.partnerSubtitle}
+                partnerAvatar={chatPanel.partnerAvatar}
+                currentUserId={userProfile?.user?.id}
+                currentUserRole="corporate"
+            />
 
             {requestModal.open && requestModal.ngo && (
                 <SendRequestModal
