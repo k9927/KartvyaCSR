@@ -98,16 +98,48 @@ export const getNGOPartnerships = (params = {}) => {
   return apiRequest(`/ngo/partnerships${queryString ? `?${queryString}` : ''}`);
 };
 
+// Partnership chat APIs
+export const getPartnershipMessages = (partnershipId, params = {}) => {
+  const queryString = new URLSearchParams(params).toString();
+  return apiRequest(`/partnerships/${partnershipId}/messages${queryString ? `?${queryString}` : ''}`);
+};
+
+export const postPartnershipMessage = (partnershipId, payload) =>
+  apiRequest(`/partnerships/${partnershipId}/messages`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+
 export const updatePartnershipProgress = (partnershipId, progress) =>
   apiRequest(`/partnerships/${partnershipId}/progress`, {
     method: 'PUT',
     body: JSON.stringify({ progress }),
   });
 
+// Partnership Meetings APIs
+export const createPartnershipMeeting = (partnershipId, payload) =>
+  apiRequest(`/partnerships/${partnershipId}/meetings`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+
+export const getPartnershipMeetings = (partnershipId) =>
+  apiRequest(`/partnerships/${partnershipId}/meetings`);
+
+export const acceptPartnershipMeeting = (partnershipId, meetingId) =>
+  apiRequest(`/partnerships/${partnershipId}/meetings/${meetingId}/accept`, {
+    method: 'POST',
+  });
+
 // Corporate Projects APIs
 export const getCorporateProjects = (params = {}) => {
   const queryString = new URLSearchParams(params).toString();
   return apiRequest(`/corporate/projects${queryString ? `?${queryString}` : ''}`);
+};
+
+export const getCorporatePartnerships = (params = {}) => {
+  const queryString = new URLSearchParams(params).toString();
+  return apiRequest(`/corporate/partnerships${queryString ? `?${queryString}` : ''}`);
 };
 
 export const updateCorporateProjectStatus = (projectId, payload) =>
@@ -137,6 +169,16 @@ export const createCorporateRequest = (payload) =>
     body: JSON.stringify(payload),
   });
 
+// Corporate Browse NGOs
+export const getCorporateBrowseNgos = (params = {}) => {
+  const queryString = new URLSearchParams(params).toString();
+  return apiRequest(`/corporate/browse-ngos${queryString ? `?${queryString}` : ''}`);
+};
+
+// Corporate Get NGO Profile
+export const getCorporateNgoProfile = (ngoId) =>
+  apiRequest(`/corporate/ngo/${ngoId}`);
+
 // Corporate Connections / Shortlist
 export const getCorporateConnections = (params = {}) => {
   const queryString = new URLSearchParams(params).toString();
@@ -155,6 +197,46 @@ export const removeCorporateNgo = (ngoId) =>
 
 // Corporate Activity
 export const getCorporateActivity = () => apiRequest('/corporate/activity');
+
+// Notifications (shared)
+export const getUserNotifications = (params = {}) => {
+  const queryString = new URLSearchParams(params).toString();
+  return apiRequest(`/notifications${queryString ? `?${queryString}` : ''}`);
+};
+
+export const markUserNotificationRead = (notificationId) =>
+  apiRequest(`/notifications/${notificationId}/read`, {
+    method: 'POST',
+  });
+
+export const markAllUserNotificationsRead = () =>
+  apiRequest('/notifications/mark-all-read', {
+    method: 'POST',
+  });
+
+// History APIs
+export const getCorporateHistory = (params = {}) => {
+  const queryString = new URLSearchParams(params).toString();
+  return apiRequest(`/corporate/history${queryString ? `?${queryString}` : ''}`);
+};
+
+export const getNGOHistory = (params = {}) => {
+  const queryString = new URLSearchParams(params).toString();
+  return apiRequest(`/ngo/history${queryString ? `?${queryString}` : ''}`);
+};
+
+// Fund Utilization APIs
+export const addFundUtilization = (partnershipId, payload) =>
+  apiRequest(`/partnerships/${partnershipId}/fund-utilization`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+
+export const getPartnershipFundUtilization = (partnershipId) =>
+  apiRequest(`/partnerships/${partnershipId}/fund-utilization`);
+
+export const getProjectFundUtilization = (projectId) =>
+  apiRequest(`/projects/${projectId}/fund-utilization`);
 
 
 

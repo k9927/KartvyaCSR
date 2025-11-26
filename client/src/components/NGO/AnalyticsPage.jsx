@@ -23,6 +23,7 @@ export default function AnalyticsPage({
   connectionHistory,
   acceptedConnections,
   showAlert,
+  partnerships = [],
 }) {
   // Local states
   const [startDate, setStartDate] = useState(() => {
@@ -57,6 +58,20 @@ export default function AnalyticsPage({
     () => projectsFiltered.reduce((s, p) => s + (Number(p.funds) || 0), 0),
     [projectsFiltered]
   );
+  
+  // Fund Utilization Metrics
+  const totalCommittedFunds = useMemo(
+    () => partnerships.reduce((sum, p) => sum + (Number(p.agreed_budget) || 0), 0),
+    [partnerships]
+  );
+  const totalUtilizedFunds = useMemo(
+    () => partnerships.reduce((sum, p) => sum + (Number(p.total_funds_utilized || p.total_utilized) || 0), 0),
+    [partnerships]
+  );
+  const totalRemainingFunds = totalCommittedFunds - totalUtilizedFunds;
+  const utilizationPercentage = totalCommittedFunds > 0 
+    ? Math.round((totalUtilizedFunds / totalCommittedFunds) * 100)
+    : 0;
   const totalBeneficiaries = useMemo(
     () => projects.reduce((s, p) => s + (Number(p.beneficiaries) || 0), 0),
     [projects]
@@ -205,8 +220,24 @@ export default function AnalyticsPage({
       </div>
 
       {/* KPI row */}
-      <div className="grid md:grid-cols-5 gap-4">
+      <div className="grid md:grid-cols-3 lg:grid-cols-5 gap-4">
         <KPI title="Total Funds" value={`₹${totalFunds.toLocaleString("en-IN")}`} />
+        <KPI
+          title="Committed Funds"
+          value={`₹${totalCommittedFunds.toLocaleString("en-IN")}`}
+        />
+        <KPI
+          title="Utilized Funds"
+          value={`₹${totalUtilizedFunds.toLocaleString("en-IN")}`}
+        />
+        <KPI
+          title="Remaining Funds"
+          value={`₹${totalRemainingFunds.toLocaleString("en-IN")}`}
+        />
+        <KPI title="Utilization %" value={`${utilizationPercentage}%`} />
+      </div>
+      
+      <div className="grid md:grid-cols-3 gap-4">
         <KPI
           title="Funds in Range"
           value={`₹${filteredFunds.toLocaleString("en-IN")}`}

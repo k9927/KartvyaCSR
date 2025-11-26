@@ -4,7 +4,7 @@ import ReportsPage from "./ReportsPage.jsx"; // adjust path if file sits in same
 import FundingPage from "./FundingPage";
 import { Bell } from "lucide-react";
 
-import React, { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import React, { useState, useMemo, useRef, useEffect, useCallback, memo } from "react";
 import { useNavigate } from "react-router-dom";
 import {
     getUserProfile,
@@ -18,7 +18,16 @@ import {
     rejectCSRRequest,
     getNGOPartnerships,
     logout,
+    getNGOHistory,
+    getUserNotifications,
+    markUserNotificationRead,
+    markAllUserNotificationsRead,
+    addFundUtilization,
+    getPartnershipFundUtilization,
 } from "../../services/api";
+import ChatDrawer from "../shared/ChatDrawer";
+import PartnerChatPanel from "../shared/PartnerChatPanel";
+import HistoryPage from "../shared/HistoryPage";
 
 import {
     PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
@@ -26,7 +35,8 @@ import {
 import {
     Menu, X, CheckCircle, HandCoins, FolderKanban, Users, TrendingUp,
     Home, BarChart2, FileText, Settings, LogOut, Calendar, MapPin, FilePlus,
-    Edit2, Trash2, CheckSquare, Eye, PlusCircle, Send,
+    Edit2, Trash2, CheckSquare, Eye, PlusCircle, Send, PanelLeft, PanelLeftClose,
+    MessageCircle, Search, History, Briefcase, Camera, Loader2,
 } from "lucide-react";
 
 /**
@@ -39,6 +49,7 @@ export default function NGODashboard() {
     const navigate = useNavigate();
     // ---------- Global UI state ----------
     const [sidebarOpen, setSidebarOpen] = useState(false);
+    const [sidebarPinned, setSidebarPinned] = useState(true);
     const [activeNav, setActiveNav] = useState("dashboard");
     const [alert, setAlert] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -71,13 +82,29 @@ export default function NGODashboard() {
     // ---------- Connections / Partnerships ----------
     const [acceptedConnections, setAcceptedConnections] = useState([]);
     const [connectionHistory, setConnectionHistory] = useState([]);
+    const [partnerships, setPartnerships] = useState([]); // Store partnerships for Analytics
     const [connSearchQuery, setConnSearchQuery] = useState("");
     const [connFilterTab, setConnFilterTab] = useState("incoming"); // incoming | accepted | history
 
     // modal states
-    const [messageModal, setMessageModal] = useState({ open: false, company: null });
-    const [scheduleModal, setScheduleModal] = useState({ open: false, company: null });
+    const [chatPanel, setChatPanel] = useState({
+        open: false,
+        partnershipId: null,
+        partnerName: "",
+        partnerSubtitle: "",
+        partnerAvatar: "",
+    });
     const [profileModal, setProfileModal] = useState({ open: false, company: null });
+
+    const resetChatPanel = useCallback(() => {
+        setChatPanel({
+            open: false,
+            partnershipId: null,
+            partnerName: "",
+            partnerSubtitle: "",
+            partnerAvatar: "",
+        });
+    }, []);
 
     // actions (reuse / duplicate logic so ConnectionsPage works standalone)
     // Accept a CSR request and update counts (removes from csrRequests, adds to acceptedConnections & history)
@@ -108,6 +135,9 @@ export default function NGODashboard() {
                 // add to connection history
                 setConnectionHistory(prev => [{ id: Date.now() + 1, company: req.company, action: "Accepted", note: req.project, date: new Date().toISOString().slice(0, 10) }, ...prev]);
 
+                // Refresh notifications and data
+                await fetchNotifications();
+
                 // Refresh data
                 const partnershipsResponse = await getNGOPartnerships({ status: 'active' });
                 if (partnershipsResponse.success && partnershipsResponse.data) {
@@ -123,6 +153,9 @@ export default function NGODashboard() {
             }
         } catch (error) {
             console.error('Error accepting request:', error);
+            if (error?.message && (error.message.toLowerCase().includes('already processed') || error.message.toLowerCase().includes('not found'))) {
+                setCsrRequests(prev => prev.filter(r => r.id !== reqId));
+            }
             showAlert(`Failed to accept request: ${error.message}`, "error");
         }
     };
@@ -139,10 +172,17 @@ export default function NGODashboard() {
             if (response.success) {
                 setCsrRequests(s => s.filter(r => r.id !== reqId));
                 setConnectionHistory(s => [{ id: Date.now() + 2, company: req.company, action: "Declined", note: reason, date: new Date().toISOString().slice(0, 10) }, ...s]);
+                
+                // Refresh notifications
+                await fetchNotifications();
+                
                 showAlert(`❌ Declined ${req.company}`, "error");
             }
         } catch (error) {
             console.error('Error rejecting request:', error);
+            if (error?.message && (error.message.toLowerCase().includes('already processed') || error.message.toLowerCase().includes('not found'))) {
+                setCsrRequests(prev => prev.filter(r => r.id !== reqId));
+            }
             showAlert(`Failed to reject request: ${error.message}`, "error");
         }
     };
@@ -155,22 +195,61 @@ export default function NGODashboard() {
         showAlert(`🔒 Closed connection with ${conn.company}`, "info");
     };
 
-    const scheduleConnMeeting = (company, datetime, link) => {
-        setConnectionHistory(s => [{ id: Date.now() + 4, company, action: "Meeting Scheduled", note: `${datetime} | ${link || "no link"}`, date: new Date().toISOString().slice(0, 10) }, ...s]);
-        setScheduleModal({ open: false, company: null });
-        showAlert(`📅 Meeting scheduled with ${company} on ${datetime}`, "success");
-    };
-
-    const sendConnMessage = (company, text) => {
-        setConnectionHistory(s => [{ id: Date.now() + 5, company, action: "Message Sent", note: text.slice(0, 80), date: new Date().toISOString().slice(0, 10) }, ...s]);
-        setMessageModal({ open: false, company: null });
-        showAlert(`✉️ Message sent to ${company}`, "success");
-    };
+    const openChatWithConnection = useCallback(
+        (connection) => {
+            if (!connection) return;
+            const partnershipId = connection?.partnershipData?.id || connection?.id;
+            if (!partnershipId) {
+                showAlert("Chat is unavailable for this connection yet.", "error");
+                return;
+            }
+            const initials = connection.company
+                ? connection.company
+                      .split(" ")
+                      .map((word) => word[0])
+                      .slice(0, 2)
+                      .join("")
+                      .toUpperCase()
+                : "";
+            setChatPanel({
+                open: true,
+                partnershipId,
+                partnerName: connection.company,
+                partnerSubtitle: connection.sharedInfo,
+                partnerAvatar: initials,
+            });
+        },
+        [showAlert]
+    );
 
 
     // ---------- Fund data for pie chart (derived from partnerships) ----------
     const [fundData, setFundData] = useState([]);
     const COLORS = ["#14b8a6", "#ec4899", "#8b5cf6"];
+
+    // ---------- NGO Chat Items (for Partner Chat Panel) ----------
+    const ngoChatItems = useMemo(
+        () =>
+            acceptedConnections
+                .filter(conn => conn.partnershipData?.id) // Only include connections with partnership data
+                .map((conn) => {
+                    const p = conn.partnershipData || {};
+                    // Prioritize project_name (actual project title) over partnership_name (CSR request description)
+                    // This shows the corporate's initiated project/description prominently
+                    const displayName = p.project_name || p.partnership_name || p.project_description || "Partnership";
+                    return {
+                        id: p.id || conn.id,
+                        partnerName: conn.company || "Corporate Partner",
+                        projectName: displayName,
+                        location: p.project_location || p.location || "Location TBA",
+                        fundsDisplay: p.budget_display || `₹${Number(p.agreed_budget || 0).toLocaleString('en-IN')}`,
+                        progress: p.progress || 0,
+                        partnershipId: p.id || conn.id,
+                        raw: conn,
+                    };
+                }),
+        [acceptedConnections]
+    );
 
     // ---------- Projects data ----------
     const [projects, setProjects] = useState([]);
@@ -179,10 +258,62 @@ export default function NGODashboard() {
     const [projectsQuery, setProjectsQuery] = useState("");
     const [projectsFilter, setProjectsFilter] = useState("all"); // all | active | completed | archived
     const [projectsSort, setProjectsSort] = useState("newest"); // newest | progress_desc | progress_asc
-    // notification dropdown state
+    // notification system
+    const [notifications, setNotifications] = useState([]);
     const [notifOpen, setNotifOpen] = useState(false);
-
+    const [notifLoading, setNotifLoading] = useState(false);
     const notifRef = useRef(null);
+    const bellRef = useRef(null);
+
+    const fetchNotifications = useCallback(async () => {
+        try {
+            setNotifLoading(true);
+            const response = await getUserNotifications({ limit: 50 });
+            const payload = Array.isArray(response?.notifications)
+                ? response.notifications
+                : response?.data?.notifications || [];
+            const normalized = payload.map((item) => ({
+                id: item.id,
+                type: item.type,
+                title: item.title,
+                message: item.message,
+                timestamp: item.created_at || item.timestamp,
+                read: Boolean(item.read || item.read_at),
+                metadata: item.metadata || {},
+            }));
+            setNotifications(normalized);
+        } catch (error) {
+            console.error("Failed to load notifications", error);
+        } finally {
+            setNotifLoading(false);
+        }
+    }, []);
+
+    const markAsRead = useCallback(async (id) => {
+        try {
+            await markUserNotificationRead(id);
+            setNotifications((prev) =>
+                prev.map((n) => (n.id === id ? { ...n, read: true } : n))
+            );
+        } catch (error) {
+            console.error("Failed to mark notification read", error);
+        }
+    }, []);
+
+    const markAllAsRead = useCallback(async () => {
+        try {
+            await markAllUserNotificationsRead();
+            setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+        } catch (error) {
+            console.error("Failed to mark notifications read", error);
+        }
+    }, []);
+
+    const unreadCount = useMemo(() => {
+        return notifications.filter((n) => !n.read).length;
+    }, [notifications]);
+
+    // Handle click outside notification dropdown
     useEffect(() => {
         function handleClickOutside(event) {
             if (
@@ -201,13 +332,6 @@ export default function NGODashboard() {
         };
     }, []);
 
-    const bellRef = useRef(null);
-
-    // safe compute: handle case connectionHistory may be undefined
-    const notifications = (connectionHistory || [])
-        .filter(h => h.action === "Message Sent" || h.action === "Message" || h.action === "Message Sent via UI")
-        .slice(0, 5);
-
     // ---------- Fetch data on mount ----------
     useEffect(() => {
         const fetchDashboardData = async () => {
@@ -219,6 +343,9 @@ export default function NGODashboard() {
                 if (profileResponse.success && profileResponse.data) {
                     setUserProfile(profileResponse.data);
                 }
+
+                // Fetch notifications
+                await fetchNotifications();
 
                 // Fetch dashboard stats
                 const statsResponse = await getNGODashboardStats();
@@ -251,37 +378,99 @@ export default function NGODashboard() {
                 const requestsResponse = await getNGORequests();
                 if (requestsResponse.success && requestsResponse.data) {
                     const reqs = requestsResponse.data.requests || requestsResponse.data;
-                    setCsrRequests(reqs.map(r => ({
-                        id: r.id,
-                        company: r.company_name || "Unknown Company",
-                        project: r.project_name || r.description || "General Partnership",
-                        budget: r.budget_display || `₹${Number(r.proposed_budget || 0).toLocaleString('en-IN')}`,
-                        message: r.message || r.description || "",
-                        receivedAt: r.requested_at ? new Date(r.requested_at).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
-                        status: r.status,
-                        requestData: r, // Keep original for API calls
-                    })));
+                    const mappedRequests = reqs.map(r => {
+                        const normalizedStatus = (r.status || '').toLowerCase();
+                        return {
+                            id: r.id,
+                            company: r.company_name || "Unknown Company",
+                            project: r.project_name || r.description || "General Partnership",
+                            budget: r.budget_display || `₹${Number(r.proposed_budget || 0).toLocaleString('en-IN')}`,
+                            message: r.message || r.description || "",
+                            receivedAt: r.requested_at ? new Date(r.requested_at).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
+                            status: normalizedStatus,
+                            rawStatus: r.status,
+                            requestData: r, // Keep original for API calls
+                        };
+                    });
+                    const pendingRequests = mappedRequests.filter(req => req.status === 'pending');
+                    setCsrRequests(pendingRequests);
+                    // Notifications will be created by the useEffect that monitors csrRequests
                 }
 
                 // Fetch partnerships (accepted connections)
                 const partnershipsResponse = await getNGOPartnerships({ status: 'active' });
+                console.log('Partnerships Response:', partnershipsResponse);
                 if (partnershipsResponse.success && partnershipsResponse.data) {
                     const parts = partnershipsResponse.data.partnerships || partnershipsResponse.data;
-                    setAcceptedConnections(parts.map(p => ({
-                        id: p.id,
-                        company: p.company_name || "Unknown Company",
-                        connectedAt: p.start_date || p.created_at ? new Date(p.start_date || p.created_at).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
-                        contact: { name: "TBD", phone: "", email: "" },
-                        sharedInfo: p.partnership_name || p.project_name || `Budget: ${p.budget_display || "N/A"}`,
-                        partnershipData: p,
-                    })));
+                    console.log('Partnerships found:', parts.length);
+                    
+                    if (parts.length === 0) {
+                        console.warn('No active partnerships found');
+                        setPartnerships([]);
+                        setFundData([]);
+                        setConnectionHistory([]);
+                    } else {
+                        // Fetch fund utilization for each partnership to get total utilized
+                        const partnershipsWithUtilization = await Promise.all(
+                            parts.map(async (p) => {
+                                try {
+                                    const utilResponse = await getPartnershipFundUtilization(p.id);
+                                    if (utilResponse.success && utilResponse.data) {
+                                        const summary = utilResponse.data.summary || {};
+                                        return {
+                                            ...p,
+                                            total_utilized: parseFloat(summary.total_utilized || 0),
+                                            total_funds_utilized: parseFloat(summary.total_utilized || 0),
+                                        };
+                                    }
+                                    return { ...p, total_utilized: 0, total_funds_utilized: 0 };
+                                } catch (error) {
+                                    console.error(`Error fetching utilization for partnership ${p.id}:`, error);
+                                    return { ...p, total_utilized: 0, total_funds_utilized: 0 };
+                                }
+                            })
+                        );
+                        
+                        console.log('Partnerships with utilization:', partnershipsWithUtilization);
+                        
+                        // Store partnerships for Analytics with utilization data
+                        setPartnerships(partnershipsWithUtilization);
+                        
+                        setAcceptedConnections(partnershipsWithUtilization.map(p => ({
+                            id: p.id,
+                            company: p.company_name || "Unknown Company",
+                            connectedAt: p.start_date || p.created_at ? new Date(p.start_date || p.created_at).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
+                            contact: { name: "TBD", phone: "", email: "" },
+                            // Store all project info for chat display - prioritize project_name over partnership_name
+                            sharedInfo: p.project_name || p.partnership_name || p.project_description || `Budget: ${p.budget_display || "N/A"}`,
+                            partnershipData: p,
+                        })));
 
-                    // Update fund data from partnerships
-                    const fundDataList = parts.map((p, idx) => ({
-                        name: p.company_name || `Partner ${idx + 1}`,
-                        value: parseFloat(p.agreed_budget || 0),
-                    }));
-                    setFundData(fundDataList);
+                        // Update fund data from partnerships
+                        const fundDataList = partnershipsWithUtilization.map((p, idx) => ({
+                            name: p.company_name || `Partner ${idx + 1}`,
+                            value: parseFloat(p.agreed_budget || 0),
+                        }));
+                        console.log('Fund Data List:', fundDataList);
+                        setFundData(fundDataList);
+                        
+                        // Build connectionHistory from partnerships for Analytics and Funding pages
+                        const historyEntries = partnershipsWithUtilization.map(p => ({
+                            id: p.id,
+                            company: p.company_name || "Unknown Company",
+                            action: "Partnership",
+                            note: `Partnership for ${p.project_name || p.partnership_name || "project"} - Budget: ₹${Number(p.agreed_budget || 0).toLocaleString('en-IN')}`,
+                            date: p.start_date || p.created_at ? new Date(p.start_date || p.created_at).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
+                            amount: parseFloat(p.agreed_budget || 0),
+                        }));
+                        console.log('Connection History:', historyEntries);
+                        setConnectionHistory(historyEntries);
+                    }
+                } else {
+                    console.warn('Partnerships response not successful:', partnershipsResponse);
+                    setPartnerships([]);
+                    setFundData([]);
+                    setConnectionHistory([]);
                 }
 
             } catch (error) {
@@ -295,11 +484,22 @@ export default function NGODashboard() {
         fetchDashboardData();
     }, []);
 
+    // Poll for notifications periodically
+    useEffect(() => {
+        fetchNotifications();
+        const interval = setInterval(fetchNotifications, 15000);
+        return () => clearInterval(interval);
+    }, [fetchNotifications]);
+
     // Modals for projects
     const [viewProject, setViewProject] = useState(null); // project object
     const [editProject, setEditProject] = useState(null); // project object for editing
     const [addProjectOpen, setAddProjectOpen] = useState(false);
     const [confirmDelete, setConfirmDelete] = useState({ open: false, projectId: null });
+    
+    // Fund utilization modal state (moved to parent to persist across re-renders)
+    // Form state is now managed inside the modal component to prevent re-renders on typing
+    const [fundUtilModal, setFundUtilModal] = useState({ open: false, partnership: null });
 
     // ---------- Helper functions (projects) ----------
     const addProject = async (project) => {
@@ -495,8 +695,8 @@ export default function NGODashboard() {
 
     // ---------- Small reusable UI pieces ----------
     const ProgressBar = ({ value }) => (
-        <div className="w-full bg-slate-100 rounded-full h-2">
-            <div className="bg-green-500 h-2 rounded-full transition-all" style={{ width: `${value}%` }} />
+        <div className="w-full h-2 rounded-full bg-slate-100">
+            <div className="h-2 transition-all bg-green-500 rounded-full" style={{ width: `${value}%` }} />
         </div>
     );
 
@@ -506,20 +706,20 @@ export default function NGODashboard() {
         return (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
                 <div className="absolute inset-0 bg-black/30" onClick={onClose} />
-                <div className="relative bg-white rounded-xl shadow-lg w-full max-w-2xl p-6 z-10">
+                <div className="relative z-10 w-full max-w-2xl p-6 bg-white shadow-lg rounded-xl">
                     <div className="flex items-start justify-between gap-4">
                         <div>
                             <h3 className="text-lg font-semibold">{project.name}</h3>
                             <p className="text-sm text-slate-500">Duration: {project.duration} months • {project.location}</p>
-                            <p className="text-xs text-slate-400 mt-1">Started: {project.startDate} {project.endDate ? `• End: ${project.endDate}` : ""}</p>
+                            <p className="mt-1 text-xs text-slate-400">Started: {project.startDate} {project.endDate ? `• End: ${project.endDate}` : ""}</p>
                         </div>
                         <div className="flex gap-2">
-                            <button onClick={() => { setEditProject(project); }} className="px-3 py-1 rounded-md bg-indigo-600 text-white flex items-center gap-2"><Edit2 /> Edit</button>
-                            <button onClick={() => setConfirmDelete({ open: true, projectId: project.id })} className="px-3 py-1 rounded-md bg-red-50 text-red-600 flex items-center gap-2"><Trash2 /> Delete</button>
+                            <button onClick={() => { setEditProject(project); }} className="flex items-center gap-2 px-3 py-1 text-white bg-indigo-600 rounded-md"><Edit2 /> Edit</button>
+                            <button onClick={() => setConfirmDelete({ open: true, projectId: project.id })} className="flex items-center gap-2 px-3 py-1 text-red-600 rounded-md bg-red-50"><Trash2 /> Delete</button>
                         </div>
                     </div>
 
-                    <div className="mt-4 grid grid-cols-2 gap-6">
+                    <div className="grid grid-cols-2 gap-6 mt-4">
                         <div>
                             <p className="text-sm text-slate-600">{project.description}</p>
                             <div className="mt-4">
@@ -543,11 +743,11 @@ export default function NGODashboard() {
                                 <div className="mt-4">
                                     <p className="text-xs text-slate-500">Documents</p>
                                     {project.documents.length === 0 ? (
-                                        <p className="text-sm text-slate-500 mt-2">No documents uploaded</p>
+                                        <p className="mt-2 text-sm text-slate-500">No documents uploaded</p>
                                     ) : (
                                         <ul className="mt-2 space-y-2">
                                             {project.documents.map(doc => (
-                                                <li key={doc.id} className="flex items-center justify-between bg-slate-50 p-2 rounded">
+                                                <li key={doc.id} className="flex items-center justify-between p-2 rounded bg-slate-50">
                                                     <div className="flex items-center gap-2">
                                                         <FilePlus size={16} />
                                                         <div>
@@ -573,12 +773,12 @@ export default function NGODashboard() {
                         </div>
                     </div>
 
-                    <div className="mt-6 flex justify-end gap-3">
+                    <div className="flex justify-end gap-3 mt-6">
                         {project.status === "archived" ? (
                             <>
                                 <button
                                     onClick={() => unarchiveProject(project.id)}
-                                    className="px-4 py-2 rounded-md bg-emerald-600 text-white flex items-center gap-2"
+                                    className="flex items-center gap-2 px-4 py-2 text-white rounded-md bg-emerald-600"
                                 >
                                     Restore
                                 </button>
@@ -587,9 +787,9 @@ export default function NGODashboard() {
                         ) : (
                             <>
                                 {project.status !== "completed" && (
-                                    <button onClick={() => markComplete(project.id)} className="px-4 py-2 rounded-md bg-green-600 text-white flex items-center gap-2"><CheckSquare /> Mark Complete</button>
+                                    <button onClick={() => markComplete(project.id)} className="flex items-center gap-2 px-4 py-2 text-white bg-green-600 rounded-md"><CheckSquare /> Mark Complete</button>
                                 )}
-                                <button onClick={() => archiveProject(project.id)} className="px-4 py-2 rounded-md bg-yellow-50 text-yellow-700">Archive</button>
+                                <button onClick={() => archiveProject(project.id)} className="px-4 py-2 text-yellow-700 rounded-md bg-yellow-50">Archive</button>
                                 <button onClick={onClose} className="px-4 py-2 rounded-md bg-slate-100">Close</button>
                             </>
                         )}
@@ -702,11 +902,11 @@ export default function NGODashboard() {
                     <div className="flex items-center justify-between mb-6">
                         <div>
                             <h3 className="text-xl font-semibold text-slate-800">Edit Project</h3>
-                            <p className="text-sm text-slate-500 mt-1">Update project details</p>
+                            <p className="mt-1 text-sm text-slate-500">Update project details</p>
                         </div>
                         <button 
                             onClick={onClose}
-                            className="p-2 rounded-full hover:bg-slate-100 transition-colors"
+                            className="p-2 transition-colors rounded-full hover:bg-slate-100"
                         >
                             <X size={20} className="text-slate-500" />
                         </button>
@@ -715,7 +915,7 @@ export default function NGODashboard() {
                     <div className="space-y-5">
                         {/* Project Name */}
                         <div className="col-span-2">
-                            <label className="block text-sm font-medium text-slate-700 mb-2">
+                            <label className="block mb-2 text-sm font-medium text-slate-700">
                                 Project Name <span className="text-red-500">*</span>
                             </label>
                             <input 
@@ -728,14 +928,14 @@ export default function NGODashboard() {
                                 placeholder="e.g., Digital Learning Labs 2.0"
                                 className={`w-full border ${errors.name ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
                             />
-                            {errors.name && <p className="text-xs text-red-500 mt-1">{errors.name}</p>}
-                            <p className="text-xs text-slate-400 mt-1">Enter a descriptive name for your project</p>
-                        </div>
+                            {errors.name && <p className="mt-1 text-xs text-red-500">{errors.name}</p>}
+                            <p className="mt-1 text-xs text-slate-400">Enter a descriptive name for your project</p>
+                    </div>
 
                         <div className="grid grid-cols-2 gap-4">
                             {/* Duration */}
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-2">
+                                <label className="block mb-2 text-sm font-medium text-slate-700">
                                     Project Duration (Months) <span className="text-red-500">*</span>
                                 </label>
                                 <input 
@@ -750,13 +950,13 @@ export default function NGODashboard() {
                                     placeholder="12"
                                     className={`w-full border ${errors.duration ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
                                 />
-                                {errors.duration && <p className="text-xs text-red-500 mt-1">{errors.duration}</p>}
-                                <p className="text-xs text-slate-400 mt-1">How long will this project run?</p>
+                                {errors.duration && <p className="mt-1 text-xs text-red-500">{errors.duration}</p>}
+                                <p className="mt-1 text-xs text-slate-400">How long will this project run?</p>
                             </div>
 
                             {/* Funds */}
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-2">
+                                <label className="block mb-2 text-sm font-medium text-slate-700">
                                     Project Funds (₹) <span className="text-red-500">*</span>
                                 </label>
                                 <input 
@@ -769,14 +969,14 @@ export default function NGODashboard() {
                                     placeholder="e.g., 32,00,000"
                                     className={`w-full border ${errors.fundsDisplay ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
                                 />
-                                {errors.fundsDisplay && <p className="text-xs text-red-500 mt-1">{errors.fundsDisplay}</p>}
-                                <p className="text-xs text-slate-400 mt-1">Total budget required for this project</p>
+                                {errors.fundsDisplay && <p className="mt-1 text-xs text-red-500">{errors.fundsDisplay}</p>}
+                                <p className="mt-1 text-xs text-slate-400">Total budget required for this project</p>
                             </div>
                         </div>
 
                         {/* Beneficiaries */}
                         <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-2">
+                            <label className="block mb-2 text-sm font-medium text-slate-700">
                                 Expected Beneficiaries
                             </label>
                             <input 
@@ -791,13 +991,13 @@ export default function NGODashboard() {
                                 placeholder="0"
                                 className={`w-full border ${errors.beneficiaries ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
                             />
-                            {errors.beneficiaries && <p className="text-xs text-red-500 mt-1">{errors.beneficiaries}</p>}
-                            <p className="text-xs text-slate-400 mt-1">Number of people who will benefit from this project</p>
+                            {errors.beneficiaries && <p className="mt-1 text-xs text-red-500">{errors.beneficiaries}</p>}
+                            <p className="mt-1 text-xs text-slate-400">Number of people who will benefit from this project</p>
                         </div>
 
                         {/* Location */}
                         <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-2">
+                            <label className="block mb-2 text-sm font-medium text-slate-700">
                                 Project Location <span className="text-red-500">*</span>
                             </label>
                             <input 
@@ -810,13 +1010,13 @@ export default function NGODashboard() {
                                 placeholder="e.g., Mumbai, Maharashtra"
                                 className={`w-full border ${errors.location ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
                             />
-                            {errors.location && <p className="text-xs text-red-500 mt-1">{errors.location}</p>}
-                            <p className="text-xs text-slate-400 mt-1">Where will this project be implemented?</p>
+                            {errors.location && <p className="mt-1 text-xs text-red-500">{errors.location}</p>}
+                            <p className="mt-1 text-xs text-slate-400">Where will this project be implemented?</p>
                         </div>
 
                         {/* Description */}
                         <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-2">
+                            <label className="block mb-2 text-sm font-medium text-slate-700">
                                 Project Description <span className="text-red-500">*</span>
                             </label>
                             <textarea 
@@ -829,12 +1029,12 @@ export default function NGODashboard() {
                                 rows={4}
                                 className={`w-full border ${errors.description ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none`}
                             />
-                            {errors.description && <p className="text-xs text-red-500 mt-1">{errors.description}</p>}
-                            <p className="text-xs text-slate-400 mt-1">Provide a detailed description of your project</p>
+                            {errors.description && <p className="mt-1 text-xs text-red-500">{errors.description}</p>}
+                            <p className="mt-1 text-xs text-slate-400">Provide a detailed description of your project</p>
                         </div>
                     </div>
 
-                    <div className="mt-6 flex justify-end gap-3 pt-4 border-t border-slate-200">
+                    <div className="flex justify-end gap-3 pt-4 mt-6 border-t border-slate-200">
                         <button 
                             onClick={onClose} 
                             className="px-5 py-2.5 rounded-lg bg-slate-100 text-slate-700 font-medium hover:bg-slate-200 transition-colors"
@@ -934,11 +1134,11 @@ export default function NGODashboard() {
                     <div className="flex items-center justify-between mb-6">
                         <div>
                             <h3 className="text-xl font-semibold text-slate-800">Add New Project</h3>
-                            <p className="text-sm text-slate-500 mt-1">Fill in the details to create a new project</p>
+                            <p className="mt-1 text-sm text-slate-500">Fill in the details to create a new project</p>
                         </div>
                         <button 
                             onClick={onClose}
-                            className="p-2 rounded-full hover:bg-slate-100 transition-colors"
+                            className="p-2 transition-colors rounded-full hover:bg-slate-100"
                         >
                             <X size={20} className="text-slate-500" />
                         </button>
@@ -947,7 +1147,7 @@ export default function NGODashboard() {
                     <div className="space-y-5">
                         {/* Project Name */}
                         <div className="col-span-2">
-                            <label className="block text-sm font-medium text-slate-700 mb-2">
+                            <label className="block mb-2 text-sm font-medium text-slate-700">
                                 Project Name <span className="text-red-500">*</span>
                             </label>
                             <input 
@@ -960,14 +1160,14 @@ export default function NGODashboard() {
                                 placeholder="e.g., Digital Learning Labs 2.0"
                                 className={`w-full border ${errors.name ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
                             />
-                            {errors.name && <p className="text-xs text-red-500 mt-1">{errors.name}</p>}
-                            <p className="text-xs text-slate-400 mt-1">Enter a descriptive name for your project</p>
-                        </div>
+                            {errors.name && <p className="mt-1 text-xs text-red-500">{errors.name}</p>}
+                            <p className="mt-1 text-xs text-slate-400">Enter a descriptive name for your project</p>
+                    </div>
 
                         <div className="grid grid-cols-2 gap-4">
                             {/* Duration */}
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-2">
+                                <label className="block mb-2 text-sm font-medium text-slate-700">
                                     Project Duration (Months) <span className="text-red-500">*</span>
                                 </label>
                                 <input 
@@ -982,13 +1182,13 @@ export default function NGODashboard() {
                                     placeholder="12"
                                     className={`w-full border ${errors.duration ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
                                 />
-                                {errors.duration && <p className="text-xs text-red-500 mt-1">{errors.duration}</p>}
-                                <p className="text-xs text-slate-400 mt-1">How long will this project run?</p>
+                                {errors.duration && <p className="mt-1 text-xs text-red-500">{errors.duration}</p>}
+                                <p className="mt-1 text-xs text-slate-400">How long will this project run?</p>
                             </div>
 
                             {/* Funds */}
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-2">
+                                <label className="block mb-2 text-sm font-medium text-slate-700">
                                     Project Funds (₹) <span className="text-red-500">*</span>
                                 </label>
                                 <input 
@@ -1001,14 +1201,14 @@ export default function NGODashboard() {
                                     placeholder="e.g., 32,00,000"
                                     className={`w-full border ${errors.fundsDisplay ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
                                 />
-                                {errors.fundsDisplay && <p className="text-xs text-red-500 mt-1">{errors.fundsDisplay}</p>}
-                                <p className="text-xs text-slate-400 mt-1">Total budget required for this project</p>
+                                {errors.fundsDisplay && <p className="mt-1 text-xs text-red-500">{errors.fundsDisplay}</p>}
+                                <p className="mt-1 text-xs text-slate-400">Total budget required for this project</p>
                             </div>
                         </div>
 
                         {/* Beneficiaries */}
                         <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-2">
+                            <label className="block mb-2 text-sm font-medium text-slate-700">
                                 Expected Beneficiaries
                             </label>
                             <input 
@@ -1023,13 +1223,13 @@ export default function NGODashboard() {
                                 placeholder="0"
                                 className={`w-full border ${errors.beneficiaries ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
                             />
-                            {errors.beneficiaries && <p className="text-xs text-red-500 mt-1">{errors.beneficiaries}</p>}
-                            <p className="text-xs text-slate-400 mt-1">Number of people who will benefit from this project</p>
+                            {errors.beneficiaries && <p className="mt-1 text-xs text-red-500">{errors.beneficiaries}</p>}
+                            <p className="mt-1 text-xs text-slate-400">Number of people who will benefit from this project</p>
                         </div>
 
                         {/* Location */}
                         <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-2">
+                            <label className="block mb-2 text-sm font-medium text-slate-700">
                                 Project Location <span className="text-red-500">*</span>
                             </label>
                             <input 
@@ -1042,13 +1242,13 @@ export default function NGODashboard() {
                                 placeholder="e.g., Mumbai, Maharashtra"
                                 className={`w-full border ${errors.location ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
                             />
-                            {errors.location && <p className="text-xs text-red-500 mt-1">{errors.location}</p>}
-                            <p className="text-xs text-slate-400 mt-1">Where will this project be implemented?</p>
+                            {errors.location && <p className="mt-1 text-xs text-red-500">{errors.location}</p>}
+                            <p className="mt-1 text-xs text-slate-400">Where will this project be implemented?</p>
                         </div>
 
                         {/* Description */}
                         <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-2">
+                            <label className="block mb-2 text-sm font-medium text-slate-700">
                                 Project Description <span className="text-red-500">*</span>
                             </label>
                             <textarea 
@@ -1061,12 +1261,12 @@ export default function NGODashboard() {
                                 rows={4}
                                 className={`w-full border ${errors.description ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none`}
                             />
-                            {errors.description && <p className="text-xs text-red-500 mt-1">{errors.description}</p>}
-                            <p className="text-xs text-slate-400 mt-1">Provide a detailed description of your project</p>
+                            {errors.description && <p className="mt-1 text-xs text-red-500">{errors.description}</p>}
+                            <p className="mt-1 text-xs text-slate-400">Provide a detailed description of your project</p>
                         </div>
                     </div>
 
-                    <div className="mt-6 flex justify-end gap-3 pt-4 border-t border-slate-200">
+                    <div className="flex justify-end gap-3 pt-4 mt-6 border-t border-slate-200">
                         <button 
                             onClick={onClose} 
                             className="px-5 py-2.5 rounded-lg bg-slate-100 text-slate-700 font-medium hover:bg-slate-200 transition-colors"
@@ -1096,9 +1296,9 @@ export default function NGODashboard() {
         return (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
                 <div className="absolute inset-0 bg-black/30" onClick={onCancel} />
-                <div className="relative bg-white rounded-xl shadow-lg w-full max-w-md p-6 z-10">
+                <div className="relative z-10 w-full max-w-md p-6 bg-white shadow-lg rounded-xl">
                     <div className="flex items-center gap-3 mb-4">
-                        <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center">
+                        <div className="flex items-center justify-center w-12 h-12 bg-red-100 rounded-full">
                             <Trash2 size={24} className="text-red-600" />
                         </div>
                         <div>
@@ -1106,13 +1306,13 @@ export default function NGODashboard() {
                             <p className="text-sm text-slate-500">This action cannot be undone</p>
                         </div>
                     </div>
-                    <p className="text-sm text-slate-600 mb-1">
+                    <p className="mb-1 text-sm text-slate-600">
                         You are about to permanently delete:
                     </p>
-                    <p className="text-sm font-medium text-slate-800 mb-4">
+                    <p className="mb-4 text-sm font-medium text-slate-800">
                         "{project?.name}"
                     </p>
-                    <p className="text-xs text-slate-500 mb-6">
+                    <p className="mb-6 text-xs text-slate-500">
                         This will completely remove the project from your dashboard. All project data will be lost and cannot be recovered.
                     </p>
                     <div className="flex justify-end gap-3">
@@ -1147,15 +1347,15 @@ export default function NGODashboard() {
         }, []);
 
         return (
-            <div className="bg-white rounded-2xl shadow-lg p-6 border border-indigo-50">
+            <div className="p-6 bg-white border shadow-lg rounded-2xl border-indigo-50">
                 <div className="flex items-center justify-between mb-4">
                     <div>
-                        <h2 className="text-xl font-semibold bg-gradient-to-r from-purple-600 to-indigo-600 bg-clip-text text-transparent">Connections</h2>
+                        <h2 className="text-xl font-semibold text-transparent bg-gradient-to-r from-purple-600 to-indigo-600 bg-clip-text">Connections</h2>
                         <p className="text-sm text-slate-500">Manage incoming requests, partners & history</p>
                     </div>
 
-                    <div className="flex gap-2 items-center">
-                        <div className="flex items-center bg-slate-100 rounded-lg px-3 py-2 shadow-sm">
+                    <div className="flex items-center gap-2">
+                        <div className="flex items-center px-3 py-2 rounded-lg shadow-sm bg-slate-100">
                             <input
                                 ref={searchRef}
                                 value={connSearchQuery}
@@ -1163,7 +1363,7 @@ export default function NGODashboard() {
                                 onKeyDown={(e) => e.stopPropagation()}
                                 onMouseDown={(e) => e.stopPropagation()}
                                 placeholder="Search companies..."
-                                className="bg-transparent outline-none text-sm"
+                                className="text-sm bg-transparent outline-none"
                                 autoFocus
                                 autoComplete="off"
                             />
@@ -1178,25 +1378,25 @@ export default function NGODashboard() {
                 <div>
                     {connFilterTab === "incoming" && (
                         <div>
-                            <h3 className="text-sm text-slate-600 mb-2">Incoming Requests</h3>
-                            {inFiltered.length === 0 ? <div className="p-6 rounded-md border border-dashed text-slate-500">No incoming requests</div> : inFiltered.map(req => (
+                            <h3 className="mb-2 text-sm text-slate-600">Incoming Requests</h3>
+                            {inFiltered.length === 0 ? <div className="p-6 border border-dashed rounded-md text-slate-500">No incoming requests</div> : inFiltered.map(req => (
                                 <div key={req.id} className="flex items-start justify-between gap-4 p-4 border-b">
                                     <div>
                                         <div className="flex items-center gap-3">
-                                            <div className="w-10 h-10 bg-indigo-50 rounded-full grid place-items-center text-indigo-600 font-semibold">{req.company.split(" ").map(s => s[0]).slice(0, 2).join("")}</div>
+                                            <div className="grid w-10 h-10 font-semibold text-indigo-600 rounded-full bg-indigo-50 place-items-center">{req.company.split(" ").map(s => s[0]).slice(0, 2).join("")}</div>
                                             <div>
                                                 <p className="font-semibold">{req.company}</p>
                                                 <p className="text-sm text-slate-500">{req.project} • <span className="text-purple-600">{req.budget}</span></p>
                                             </div>
                                         </div>
-                                        <p className="text-xs text-slate-500 italic mt-2">{req.message}</p>
-                                        <p className="text-xs text-slate-400 mt-1">Received: {req.receivedAt}</p>
+                                        <p className="mt-2 text-xs italic text-slate-500">{req.message}</p>
+                                        <p className="mt-1 text-xs text-slate-400">Received: {req.receivedAt}</p>
                                     </div>
 
                                     <div className="flex flex-col items-end gap-2">
                                         <div className="flex gap-2">
-                                            <button onClick={() => acceptConnectionRequest(req.id)} className="px-3 py-1 rounded-lg bg-green-600 text-white">Accept</button>
-                                            <button onClick={() => declineConnectionRequest(req.id)} className="px-3 py-1 rounded-lg bg-red-600 text-white">Decline</button>
+                                            <button onClick={() => acceptConnectionRequest(req.id)} className="px-3 py-1 text-white bg-green-600 rounded-lg">Accept</button>
+                                            <button onClick={() => declineConnectionRequest(req.id)} className="px-3 py-1 text-white bg-red-600 rounded-lg">Decline</button>
                                         </div>
                                         <div className="text-xs text-slate-400">ID: {req.id}</div>
                                     </div>
@@ -1207,23 +1407,27 @@ export default function NGODashboard() {
 
                     {connFilterTab === "accepted" && (
                         <div>
-                            <h3 className="text-sm text-slate-600 mb-2">Accepted Connections</h3>
-                            {acceptedFiltered.length === 0 ? <div className="p-6 rounded-md border border-dashed text-slate-500">No accepted connections</div> : acceptedFiltered.map(conn => (
+                            <h3 className="mb-2 text-sm text-slate-600">Accepted Connections</h3>
+                            {acceptedFiltered.length === 0 ? <div className="p-6 border border-dashed rounded-md text-slate-500">No accepted connections</div> : acceptedFiltered.map(conn => (
                                 <div key={conn.id} className="flex items-center justify-between gap-4 p-4 border-b">
                                     <div className="flex items-center gap-3">
-                                        <div className="w-10 h-10 bg-cyan-50 rounded-full grid place-items-center text-cyan-600 font-semibold">{conn.company.split(" ").map(s => s[0]).slice(0, 2).join("")}</div>
+                                        <div className="grid w-10 h-10 font-semibold rounded-full bg-cyan-50 place-items-center text-cyan-600">{conn.company.split(" ").map(s => s[0]).slice(0, 2).join("")}</div>
                                         <div>
                                             <p className="font-semibold">{conn.company}</p>
                                             <p className="text-sm text-slate-500">Connected: {conn.connectedAt}</p>
-                                            <p className="text-sm text-slate-600 mt-1">{conn.sharedInfo}</p>
+                                            <p className="mt-1 text-sm text-slate-600">{conn.sharedInfo}</p>
                                         </div>
                                     </div>
 
                                     <div className="flex items-center gap-2">
-                                        <button onClick={() => setMessageModal({ open: true, company: conn.company })} className="px-3 py-1 rounded-lg bg-indigo-600 text-white">Message</button>
-                                        <button onClick={() => setScheduleModal({ open: true, company: conn.company })} className="px-3 py-1 rounded-lg bg-emerald-600 text-white">Schedule</button>
+                                        <button
+                                            onClick={() => openChatWithConnection(conn)}
+                                            className="px-3 py-1 text-white bg-indigo-600 rounded-lg"
+                                        >
+                                            Chat
+                                        </button>
                                         <button onClick={() => setProfileModal({ open: true, company: conn })} className="px-3 py-1 rounded-lg bg-slate-100">Profile</button>
-                                        <button onClick={() => closeConnection(conn.id)} className="px-3 py-1 rounded-lg bg-red-50 text-red-600">Close</button>
+                                        <button onClick={() => closeConnection(conn.id)} className="px-3 py-1 text-red-600 rounded-lg bg-red-50">Close</button>
                                     </div>
                                 </div>
                             ))}
@@ -1232,8 +1436,8 @@ export default function NGODashboard() {
 
                     {connFilterTab === "history" && (
                         <div>
-                            <h3 className="text-sm text-slate-600 mb-2">Connection History</h3>
-                            {historyFiltered.length === 0 ? <div className="p-6 rounded-md border border-dashed text-slate-500">No history</div> : historyFiltered.map(h => (
+                            <h3 className="mb-2 text-sm text-slate-600">Connection History</h3>
+                            {historyFiltered.length === 0 ? <div className="p-6 border border-dashed rounded-md text-slate-500">No history</div> : historyFiltered.map(h => (
                                 <div key={h.id} className="flex items-start justify-between gap-4 p-3 border-b">
                                     <div>
                                         <p className="font-medium">{h.company} <span className="text-xs text-slate-400">• {h.date}</span></p>
@@ -1246,51 +1450,15 @@ export default function NGODashboard() {
                     )}
                 </div>
 
-                {/* simple modals reused from earlier patterns */}
-                {messageModal.open && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-                        <div className="absolute inset-0 bg-black/30" onClick={() => setMessageModal({ open: false, company: null })}></div>
-                        <div className="relative bg-white rounded-xl shadow-lg p-6 w-full max-w-lg z-10">
-                            <div className="flex items-center justify-between mb-4">
-                                <h3 className="font-semibold">Message {messageModal.company}</h3>
-                                <button onClick={() => setMessageModal({ open: false, company: null })}><X /></button>
-                            </div>
-                            <textarea className="w-full border rounded p-3 min-h-[120px]" placeholder="Write message..." onKeyDown={(e) => { if (e.key === 'Enter') { sendConnMessage(messageModal.company, e.target.value); } }} />
-                            <div className="flex justify-end gap-2 mt-3">
-                                <button onClick={() => setMessageModal({ open: false, company: null })} className="px-3 py-2 bg-slate-100 rounded">Cancel</button>
-                                <button onClick={() => { sendConnMessage(messageModal.company, 'Sent via UI'); }} className="px-3 py-2 bg-indigo-600 text-white rounded">Send</button>
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {scheduleModal.open && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-                        <div className="absolute inset-0 bg-black/30" onClick={() => setScheduleModal({ open: false, company: null })}></div>
-                        <div className="relative bg-white rounded-xl shadow-lg p-6 w-full max-w-md z-10">
-                            <div className="flex items-center justify-between mb-4">
-                                <h3 className="font-semibold">Schedule — {scheduleModal.company}</h3>
-                                <button onClick={() => setScheduleModal({ open: false, company: null })}><X /></button>
-                            </div>
-                            <input type="datetime-local" className="w-full border rounded p-2" id="schedDt" />
-                            <input type="url" className="w-full border rounded p-2 mt-2" placeholder="Meeting link (optional)" id="schedLink" />
-                            <div className="flex justify-end gap-2 mt-3">
-                                <button onClick={() => setScheduleModal({ open: false, company: null })} className="px-3 py-2 bg-slate-100 rounded">Cancel</button>
-                                <button onClick={() => { const dt = document.getElementById('schedDt')?.value; const l = document.getElementById('schedLink')?.value; scheduleConnMeeting(scheduleModal.company, dt, l); }} className="px-3 py-2 bg-green-600 text-white rounded">Schedule</button>
-                            </div>
-                        </div>
-                    </div>
-                )}
-
                 {profileModal.open && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
                         <div className="absolute inset-0 bg-black/30" onClick={() => setProfileModal({ open: false, company: null })}></div>
-                        <div className="relative bg-white rounded-xl shadow-lg p-6 w-full max-w-lg z-10">
+                        <div className="relative z-10 w-full max-w-lg p-6 bg-white shadow-lg rounded-xl">
                             <div className="flex items-center justify-between">
                                 <h3 className="font-semibold">{profileModal.company.company} — Profile</h3>
                                 <button onClick={() => setProfileModal({ open: false, company: null })}><X /></button>
                             </div>
-                            <div className="mt-4 grid grid-cols-2 gap-4">
+                            <div className="grid grid-cols-2 gap-4 mt-4">
                                 <div>
                                     <p className="text-xs text-slate-500">Contact</p>
                                     <p className="font-medium">{profileModal.company.contact?.name || "Not provided"}</p>
@@ -1299,12 +1467,12 @@ export default function NGODashboard() {
                                 <div>
                                     <p className="text-xs text-slate-500">Connected</p>
                                     <p className="font-medium">{profileModal.company.connectedAt}</p>
-                                    <p className="text-xs text-slate-500 mt-3">Shared</p>
+                                    <p className="mt-3 text-xs text-slate-500">Shared</p>
                                     <p>{profileModal.company.sharedInfo}</p>
                                 </div>
                             </div>
                             <div className="mt-4 text-right">
-                                <button onClick={() => setProfileModal({ open: false, company: null })} className="px-3 py-2 bg-slate-100 rounded">Close</button>
+                                <button onClick={() => setProfileModal({ open: false, company: null })} className="px-3 py-2 rounded bg-slate-100">Close</button>
                             </div>
                         </div>
                     </div>
@@ -1313,6 +1481,197 @@ export default function NGODashboard() {
         );
     }
 
+
+    // ---------- Active Partnerships Page UI ----------
+    function ActivePartnershipsPage({ fundUtilModal, setFundUtilModal }) {
+        const [partnerships, setPartnerships] = useState([]);
+        const [loading, setLoading] = useState(true);
+        // Modal state is passed from parent to persist across re-renders
+
+        const modalOpenRef = useRef(false);
+        
+        // Keep modal state in sync with ref
+        useEffect(() => {
+            modalOpenRef.current = fundUtilModal.open;
+        }, [fundUtilModal.open]);
+
+        const loadPartnerships = useCallback(async (skipIfModalOpen = false) => {
+            // Skip reload if modal is open to prevent form from closing
+            if (skipIfModalOpen && modalOpenRef.current) {
+                return;
+            }
+            
+            try {
+                setLoading(true);
+                const response = await getNGOPartnerships({ status: 'active' });
+                if (response.success && response.data) {
+                    const parts = response.data.partnerships || response.data;
+                    setPartnerships(parts);
+                }
+            } catch (error) {
+                console.error('Error loading partnerships:', error);
+                showAlert(`Failed to load partnerships: ${error.message}`, "error");
+            } finally {
+                setLoading(false);
+            }
+        }, [showAlert]);
+
+        useEffect(() => {
+            loadPartnerships();
+            
+            // Listen for partnership updates from modal
+            const handlePartnershipUpdate = (event) => {
+                const { partnershipId, progress } = event.detail;
+                setPartnerships(prev => prev.map(p => 
+                    p.id === partnershipId 
+                        ? { ...p, progress }
+                        : p
+                ));
+            };
+            
+            window.addEventListener('partnershipUpdated', handlePartnershipUpdate);
+            return () => {
+                window.removeEventListener('partnershipUpdated', handlePartnershipUpdate);
+            };
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, []);
+
+        const ProgressBar = ({ value }) => (
+            <div className="w-full bg-slate-200 rounded-full h-2.5">
+                <div 
+                    className="bg-indigo-600 h-2.5 rounded-full transition-all duration-300"
+                    style={{ width: `${Math.min(100, Math.max(0, value))}%` }}
+                />
+            </div>
+        );
+
+        if (loading) {
+            return (
+                <div className="flex items-center justify-center min-h-[400px]">
+                    <div className="text-center">
+                        <div className="inline-block w-12 h-12 mb-4 border-b-2 border-indigo-600 rounded-full animate-spin"></div>
+                        <p className="text-slate-600">Loading partnerships...</p>
+                    </div>
+                </div>
+            );
+        }
+
+        return (
+            <div className="space-y-6">
+                <div className="p-6 bg-white border shadow-lg rounded-2xl border-indigo-50">
+                    <div className="flex items-center justify-between mb-6">
+                        <div>
+                            <h2 className="text-xl font-semibold bg-gradient-to-r from-purple-600 to-indigo-600 bg-clip-text text-transparent font-[Poppins]">
+                                Active Partnerships
+                            </h2>
+                            <p className="text-sm text-slate-500">
+                                Manage your active partnerships and track progress with corporate partners
+                            </p>
+                        </div>
+                    </div>
+
+                    {partnerships.length === 0 ? (
+                        <div className="p-12 text-center border border-dashed rounded-xl text-slate-500 bg-slate-50">
+                            <Briefcase size={48} className="mx-auto mb-4 text-slate-400" />
+                            <p className="text-lg font-semibold">No active partnerships</p>
+                            <p className="mt-2 text-sm text-slate-400">
+                                Accept a CSR request to start an active partnership
+                            </p>
+                        </div>
+                    ) : (
+                        <div className="grid gap-4">
+                            {partnerships.map((partnership) => (
+                                <div 
+                                    key={partnership.id} 
+                                    className="p-5 transition-shadow bg-white border border-slate-200 rounded-xl hover:shadow-md"
+                                >
+                                    <div className="flex items-start justify-between gap-4">
+                                        <div className="flex-1">
+                                            <div className="flex items-center gap-3 mb-2">
+                                                <h3 className="text-lg font-semibold text-slate-800">
+                                                    {partnership.project_name || partnership.partnership_name || "Partnership"}
+                                                </h3>
+                                                <span className={`px-2 py-1 text-xs rounded-full ${
+                                                    partnership.status === 'active' 
+                                                        ? 'bg-green-100 text-green-700' 
+                                                        : 'bg-slate-100 text-slate-600'
+                                                }`}>
+                                                    {partnership.status}
+                                                </span>
+                                            </div>
+                                            
+                                            {partnership.project_description && (
+                                                <p className="mb-3 text-sm text-slate-600 line-clamp-2">
+                                                    {partnership.project_description}
+                                                </p>
+                                            )}
+                                            
+                                            <div className="grid grid-cols-1 gap-4 mt-4 md:grid-cols-3">
+                                                <div>
+                                                    <p className="mb-1 text-xs text-slate-500">Corporate Partner</p>
+                                                    <p className="font-medium text-slate-700">
+                                                        {partnership.company_name || "Unknown Company"}
+                                                    </p>
+                                                </div>
+                                                <div>
+                                                    <p className="mb-1 text-xs text-slate-500">Agreed Budget</p>
+                                                    <p className="font-medium text-slate-700">
+                                                        {partnership.budget_display || `₹${Number(partnership.agreed_budget || 0).toLocaleString('en-IN')}`}
+                                                    </p>
+                                                </div>
+                                                <div>
+                                                    <p className="mb-1 text-xs text-slate-500">Start Date</p>
+                                                    <p className="font-medium text-slate-700">
+                                                        {partnership.start_date ? new Date(partnership.start_date).toLocaleDateString('en-IN') : "N/A"}
+                                                    </p>
+                                                </div>
+                                            </div>
+
+                                            <div className="mt-4">
+                                                <div className="flex items-center justify-between mb-2">
+                                                    <p className="text-sm font-medium text-slate-700">Progress</p>
+                                                    <span className="text-sm font-semibold text-indigo-600">
+                                                        {partnership.progress || 0}%
+                                                    </span>
+                                                </div>
+                                                <ProgressBar value={partnership.progress || 0} />
+                                            </div>
+                                        </div>
+
+                                        <div className="flex flex-col gap-2">
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    // Form will reset automatically when modal opens (handled in modal component)
+                                                    setFundUtilModal({ open: true, partnership });
+                                                }}
+                                                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-500"
+                                            >
+                                                <Edit2 size={16} />
+                                                Update Progress
+                                            </button>
+                                            <button
+                                                onClick={() => openChatWithConnection({
+                                                    id: partnership.id,
+                                                    company: partnership.company_name,
+                                                    partnershipData: partnership
+                                                })}
+                                                className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg text-slate-700 bg-slate-100 hover:bg-slate-200"
+                                            >
+                                                <MessageCircle size={16} />
+                                                Chat
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+
+            </div>
+        );
+    }
 
     // ---------- Projects Page UI ----------
     function ProjectsPage() {
@@ -1330,7 +1689,7 @@ export default function NGODashboard() {
         }, []);
 
         return (
-            <div className="bg-white rounded-2xl shadow-lg p-6 border border-indigo-50">
+            <div className="p-6 bg-white border shadow-lg rounded-2xl border-indigo-50">
                 <div className="flex items-center justify-between gap-4">
                     <div>
                         <h2 className="text-xl font-semibold bg-gradient-to-r from-purple-600 to-indigo-600 bg-clip-text text-transparent font-[Poppins]">Active Projects</h2>
@@ -1338,7 +1697,7 @@ export default function NGODashboard() {
                     </div>
 
                     <div className="flex items-center gap-2">
-                        <div className="flex items-center bg-slate-100 rounded-lg px-3 py-2 shadow-sm">
+                        <div className="flex items-center px-3 py-2 rounded-lg shadow-sm bg-slate-100">
                             <input
                                 ref={searchRef}
                                 value={projectsQuery}
@@ -1346,7 +1705,7 @@ export default function NGODashboard() {
                                 onKeyDown={(e) => e.stopPropagation()}        /* prevent parent shortcuts stealing focus */
                                 onMouseDown={(e) => e.stopPropagation()}      /* prevent pointer handlers stealing focus */
                                 placeholder="Search projects, location..."
-                                className="bg-transparent outline-none text-sm"
+                                className="text-sm bg-transparent outline-none"
                                 autoFocus
                                 autoComplete="off"
                                 inputMode="search"
@@ -1354,65 +1713,65 @@ export default function NGODashboard() {
                             />
                         </div>
 
-                        <select value={projectsFilter} onChange={(e) => setProjectsFilter(e.target.value)} className="border rounded px-3 py-2 text-sm">
+                        <select value={projectsFilter} onChange={(e) => setProjectsFilter(e.target.value)} className="px-3 py-2 text-sm border rounded">
                             <option value="all">All</option>
                             <option value="active">Active</option>
                             <option value="completed">Completed</option>
                             <option value="archived">Archived</option>
                         </select>
 
-                        <select value={projectsSort} onChange={(e) => setProjectsSort(e.target.value)} className="border rounded px-3 py-2 text-sm">
+                        <select value={projectsSort} onChange={(e) => setProjectsSort(e.target.value)} className="px-3 py-2 text-sm border rounded">
                             <option value="newest">Newest</option>
                             <option value="progress_desc">Progress (High → Low)</option>
                             <option value="progress_asc">Progress (Low → High)</option>
                         </select>
 
-                        <button onClick={() => setAddProjectOpen(true)} className="px-3 py-2 bg-indigo-600 text-white rounded-lg flex items-center gap-2">
+                        <button onClick={() => setAddProjectOpen(true)} className="flex items-center gap-2 px-3 py-2 text-white bg-indigo-600 rounded-lg">
                             <PlusCircle /> Add Project
                         </button>
                     </div>
                 </div>
 
-                <div className="mt-6 grid gap-4">
+                <div className="grid gap-4 mt-6">
                     {filteredProjects.length === 0 ? (
-                        <div className="p-6 rounded border border-dashed text-slate-500">No projects found</div>
+                        <div className="p-6 border border-dashed rounded text-slate-500">No projects found</div>
                     ) : (
                         filteredProjects.map((p) => (
-                            <div key={p.id} className="p-4 rounded-lg border hover:shadow-md transition-all bg-white flex items-center justify-between gap-4">
+                            <div key={p.id} className="flex items-center justify-between gap-4 p-4 transition-all bg-white border rounded-lg hover:shadow-md">
                                 <div className="flex items-start gap-4">
-                                    <div className="w-12 h-12 rounded-lg bg-indigo-50 grid place-items-center text-indigo-700 font-semibold">
+                                    <div className="grid w-12 h-12 font-semibold text-indigo-700 rounded-lg bg-indigo-50 place-items-center">
                                         {p.name.split(" ").map(s => s[0]).slice(0, 2).join("")}
                                     </div>
                                     <div>
                                         <div className="flex items-center gap-3">
                                             <h3 className="font-semibold">{p.name}</h3>
-                                            <div className="text-xs text-slate-400 px-2 py-1 rounded bg-slate-100">{p.status}</div>
+                                            <div className="px-2 py-1 text-xs rounded text-slate-400 bg-slate-100">{p.status}</div>
                                         </div>
                                         <p className="text-sm text-slate-500">Duration: {p.duration} months • {p.location}</p>
-                                        <p className="text-xs text-slate-400 mt-1">Beneficiaries: <span className="font-medium">{p.beneficiaries}</span> • Funds: <span className="font-medium">{p.fundsDisplay}</span></p>
+                                        <p className="mt-1 text-xs text-slate-400">Beneficiaries: <span className="font-medium">{p.beneficiaries}</span> • Funds: <span className="font-medium">{p.fundsDisplay}</span></p>
                                     </div>
                                 </div>
 
                                 <div className="flex items-center gap-4 min-w-[280px]">
                                     <div className="w-48">
                                         <ProgressBar value={p.progress} />
-                                        <div className="text-xs text-slate-500 mt-2">{p.progress}% completed</div>
+                                        <div className="mt-2 text-xs text-slate-500">{p.progress}% completed</div>
                                     </div>
 
                                     <div className="flex items-center gap-2">
-                                        <button onClick={() => setViewProject(p)} className="px-3 py-1 rounded-md bg-slate-100 hover:bg-slate-200 flex items-center gap-2"><Eye /> View</button>
+                                        <button onClick={() => setViewProject(p)} className="flex items-center gap-2 px-3 py-1 rounded-md bg-slate-100 hover:bg-slate-200"><Eye /> View</button>
 
                                         {p.status === "archived" ? (
                                             <button
                                                 onClick={() => unarchiveProject(p.id)}
-                                                className="px-3 py-1 rounded-md bg-emerald-50 text-emerald-700 hover:bg-emerald-100 flex items-center gap-2"
+                                                className="flex items-center gap-2 px-3 py-1 rounded-md bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
                                             >
                                                 Restore
                                             </button>
                                         ) : (
                                             <>
-                                                <button onClick={() => setEditProject(p)} className="px-3 py-1 rounded-md bg-indigo-600 text-white flex items-center gap-2"><Edit2 /> Edit</button>
-                                                <button onClick={() => setConfirmDelete({ open: true, projectId: p.id })} className="px-3 py-1 rounded-md bg-red-50 text-red-600 flex items-center gap-2"><Trash2 /> Delete</button>
+                                                <button onClick={() => setEditProject(p)} className="flex items-center gap-2 px-3 py-1 text-white bg-indigo-600 rounded-md"><Edit2 /> Edit</button>
+                                                <button onClick={() => setConfirmDelete({ open: true, projectId: p.id })} className="flex items-center gap-2 px-3 py-1 text-red-600 rounded-md bg-red-50"><Trash2 /> Delete</button>
                                             </>
                                         )}
                                     </div>
@@ -1434,10 +1793,17 @@ export default function NGODashboard() {
             {sidebarOpen && <div className="fixed inset-0 z-20 bg-black/20 lg:hidden" onClick={() => setSidebarOpen(false)} />}
 
             {/* Sidebar */}
-            <aside className={`fixed top-0 left-0 h-full bg-white/95 backdrop-blur-md shadow-xl transform transition-transform duration-300 z-30 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} w-64`}>
-                <div className="p-6 border-b flex items-center justify-between">
-                    <h2 className="text-2xl font-extrabold bg-gradient-to-r from-purple-500 to-indigo-600 bg-clip-text text-transparent">Kartvya</h2>
-                    <button onClick={() => setSidebarOpen(false)} className="p-1 rounded hover:bg-slate-100"><X /></button>
+            <aside className={`fixed top-0 left-0 h-full bg-white/95 backdrop-blur-md shadow-xl transform transition-transform duration-300 z-30 w-64 ${
+                sidebarOpen ? "translate-x-0" : "-translate-x-full"
+            } ${sidebarPinned ? "lg:translate-x-0" : "lg:-translate-x-full"}`}>
+                <div className="flex items-center justify-between p-6 border-b">
+                    <h2 className="text-2xl font-extrabold text-transparent bg-gradient-to-r from-purple-500 to-indigo-600 bg-clip-text">Kartvya</h2>
+                    <button 
+                        onClick={() => setSidebarOpen(false)} 
+                        className="p-1 rounded hover:bg-slate-100 lg:hidden"
+                    >
+                        <X size={18} />
+                    </button>
                 </div>
 
                 <nav className="p-4 space-y-1">
@@ -1446,7 +1812,10 @@ export default function NGODashboard() {
                         { id: "analytics", label: "Analytics", icon: BarChart2 },
                         { id: "funding", label: "Funding", icon: HandCoins },
                         { id: "projects", label: "Projects", icon: FolderKanban },
+                        { id: "partnerships", label: "Active Partnerships", icon: Briefcase },
                         { id: "connections", label: "Connections", icon: Users },
+                        { id: "chat", label: "Partner Chat", icon: MessageCircle },
+                        { id: "history", label: "History", icon: History },
                         { id: "reports", label: "Reports", icon: FileText },
                         { id: "settings", label: "Settings", icon: Settings },
                     ].map(item => {
@@ -1460,10 +1829,10 @@ export default function NGODashboard() {
                         );
                     })}
 
-                    <div className="mt-4 border-t pt-4">
+                    <div className="pt-4 mt-4 border-t">
                         <button 
                             onClick={handleLogout}
-                            className="w-full flex items-center gap-3 p-3 rounded-lg text-red-600 hover:bg-red-50"
+                            className="flex items-center w-full gap-3 p-3 text-red-600 rounded-lg hover:bg-red-50"
                         >
                             <LogOut size={18} />
                             <span className="font-medium">Logout</span>
@@ -1473,11 +1842,25 @@ export default function NGODashboard() {
             </aside>
 
             {/* Main content */}
-            <div className="flex-1 flex flex-col min-w-0">
+            <div className={`flex-1 flex flex-col min-w-0 transition-all duration-300 ${
+                sidebarPinned ? "lg:ml-64" : "lg:ml-0"
+            }`}>
                 {/* Header */}
-                <header className="flex items-center justify-between p-6 bg-white border-b shadow sticky top-0 z-10">
+                <header className="sticky top-0 z-10 flex items-center justify-between p-6 bg-white border-b shadow">
                     <div className="flex items-center gap-4">
-                        <button onClick={() => setSidebarOpen(true)} className="p-2 bg-white border rounded-lg shadow-sm hover:shadow-md"><Menu size={20} /></button>
+                        <button 
+                            onClick={() => setSidebarOpen(true)} 
+                            className="p-2 bg-white border rounded-lg shadow-sm hover:shadow-md lg:hidden"
+                        >
+                            <Menu size={20} />
+                        </button>
+                        <button
+                            onClick={() => setSidebarPinned(!sidebarPinned)}
+                            className="hidden p-2 transition-colors bg-white border rounded-lg shadow-sm lg:flex hover:shadow-md"
+                            aria-label={sidebarPinned ? "Collapse sidebar" : "Expand sidebar"}
+                        >
+                            {sidebarPinned ? <PanelLeftClose size={18} /> : <PanelLeft size={18} />}
+                        </button>
                         <div>
                             <h1 className="text-xl font-bold text-indigo-700">
                                 {userProfile?.profile?.organization_name || userProfile?.user?.name || "NGO Dashboard"}
@@ -1495,42 +1878,120 @@ export default function NGODashboard() {
                             <button
                                 ref={bellRef}
                                 onClick={() => setNotifOpen(!notifOpen)}
-                                className="p-2 bg-white border rounded-lg shadow-sm hover:shadow-md relative"
+                                className="relative p-2 bg-white border rounded-lg shadow-sm hover:shadow-md"
                             >
                                 <Bell size={20} />
+                                {unreadCount > 0 && (
+                                    <span className="absolute flex items-center justify-center w-5 h-5 text-xs font-bold text-white bg-red-500 rounded-full -top-1 -right-1">
+                                        {unreadCount > 9 ? '9+' : unreadCount}
+                                    </span>
+                                )}
                             </button>
 
                             {notifOpen && (
                                 <div
                                     ref={notifRef}
-                                    className="absolute right-0 mt-2 w-72 bg-white rounded-xl shadow-lg border p-4 z-50"
+                                    className="absolute right-0 z-50 mt-2 bg-white border shadow-lg w-80 rounded-xl"
                                 >
-                                    <h4 className="font-semibold text-slate-700 mb-3">Messages</h4>
+                                    <div className="flex items-center justify-between p-4 border-b">
+                                        <h4 className="font-semibold text-slate-700">Notifications</h4>
+                                        {unreadCount > 0 && (
+                                            <button
+                                                onClick={markAllAsRead}
+                                                className="text-xs text-indigo-600 hover:text-indigo-700"
+                                            >
+                                                Mark all as read
+                                            </button>
+                                        )}
+                        </div>
 
-                                    {notifications.length === 0 ? (
-                                        <p className="text-sm text-slate-500">No messages yet</p>
-                                    ) : (
-                                        <div className="space-y-3 max-h-60 overflow-y-auto">
-                                            {notifications.map((n) => (
-                                                <div key={n.id} className="p-3 bg-slate-50 rounded border">
-                                                    <p className="font-medium text-sm">{n.company}</p>
-                                                    <p className="text-xs text-slate-500">{n.note}</p>
-                                                    <p className="text-[10px] text-slate-400 mt-1">{n.date}</p>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
+                                    <div className="overflow-y-auto max-h-96">
+                                        {notifLoading ? (
+                                            <div className="p-6 text-center">
+                                                <div className="w-8 h-8 mx-auto mb-2 border-b-2 border-indigo-600 rounded-full animate-spin"></div>
+                                                <p className="text-sm text-slate-500">Loading notifications...</p>
+                                            </div>
+                                        ) : notifications.length === 0 ? (
+                                            <div className="p-6 text-center">
+                                                <Bell size={32} className="mx-auto mb-2 text-slate-300" />
+                                                <p className="text-sm text-slate-500">No notifications yet</p>
+                                            </div>
+                                        ) : (
+                                            <div className="divide-y">
+                                                {notifications.slice(0, 20).map((n) => {
+                                                    const isRead = n.read;
+                                                    const getIcon = () => {
+                                                        switch(n.type) {
+                                                            case 'accepted': return '✅';
+                                                            case 'rejected': return '❌';
+                                                            case 'meeting': return '📅';
+                                                            case 'message': return '✉️';
+                                                            case 'fund': return '💰';
+                                                            case 'partnership': return '🤝';
+                                                            case 'request': return '📥';
+                                                            default: return 'ℹ️';
+                                                        }
+                                                    };
+                                                    const getColor = () => {
+                                                        switch(n.type) {
+                                                            case 'accepted': return 'bg-green-50 border-green-200';
+                                                            case 'rejected': return 'bg-red-50 border-red-200';
+                                                            case 'meeting': return 'bg-blue-50 border-blue-200';
+                                                            case 'message': return 'bg-purple-50 border-purple-200';
+                                                            case 'fund': return 'bg-yellow-50 border-yellow-200';
+                                                            case 'partnership': return 'bg-indigo-50 border-indigo-200';
+                                                            case 'request': return 'bg-cyan-50 border-cyan-200';
+                                                            default: return 'bg-slate-50 border-slate-200';
+                                                        }
+                                                    };
+                                                    const timeAgo = (timestamp) => {
+                                                        const now = new Date();
+                                                        const past = new Date(timestamp);
+                                                        const diffMs = now - past;
+                                                        const diffMins = Math.floor(diffMs / 60000);
+                                                        const diffHours = Math.floor(diffMs / 3600000);
+                                                        const diffDays = Math.floor(diffMs / 86400000);
+                                                        if (diffMins < 1) return 'Just now';
+                                                        if (diffMins < 60) return `${diffMins}m ago`;
+                                                        if (diffHours < 24) return `${diffHours}h ago`;
+                                                        return `${diffDays}d ago`;
+                                                    };
+                                                    return (
+                                                        <div
+                                                            key={n.id}
+                                                            onClick={() => markAsRead(n.id)}
+                                                            className={`p-3 cursor-pointer transition-colors ${isRead ? 'bg-white' : getColor()} hover:bg-slate-50`}
+                                                        >
+                                                            <div className="flex items-start gap-3">
+                                                                <span className="text-lg">{getIcon()}</span>
+                                                                <div className="flex-1 min-w-0">
+                                                                    <p className={`font-medium text-sm ${isRead ? 'text-slate-600' : 'text-slate-800'}`}>
+                                                                        {n.title}
+                                                                    </p>
+                                                                    <p className="mt-1 text-xs text-slate-500">{n.message}</p>
+                                                                    <p className="text-[10px] text-slate-400 mt-1">{timeAgo(n.timestamp)}</p>
+                                                                </div>
+                                                                {!isRead && (
+                                                                    <span className="w-2 h-2 bg-indigo-500 rounded-full mt-1.5"></span>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                             )}
                         </div>
 
                         {/* Verified Badge (unchanged) */}
-                        <div className="relative flex items-center gap-3 bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 rounded-full px-4 py-2 shadow-md">
+                        <div className="relative flex items-center gap-3 px-4 py-2 border rounded-full shadow-md bg-gradient-to-r from-emerald-50 to-teal-50 border-emerald-200">
                             <CheckCircle size={22} className="text-emerald-600" />
                             <div className="flex flex-col leading-tight">
                                 <span className="text-sm font-semibold text-emerald-700">Verified Organization</span>
                                 <span className="text-[11px] text-green-700">
-                                    Badge ID: <span className="text-emerald-600 font-semibold">VF-2025-011</span>
+                                    Badge ID: <span className="font-semibold text-emerald-600">VF-2025-011</span>
                                 </span>
                             </div>
                         </div>
@@ -1542,7 +2003,7 @@ export default function NGODashboard() {
                     {loading && (
                         <div className="flex items-center justify-center min-h-[400px]">
                             <div className="text-center">
-                                <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mb-4"></div>
+                                <div className="inline-block w-12 h-12 mb-4 border-b-2 border-indigo-600 rounded-full animate-spin"></div>
                                 <p className="text-slate-600">Loading dashboard...</p>
                             </div>
                         </div>
@@ -1555,6 +2016,7 @@ export default function NGODashboard() {
                             fundData={fundData}
                             connectionHistory={connectionHistory}
                             acceptedConnections={acceptedConnections}
+                            partnerships={partnerships}
                             showAlert={showAlert}
                         />
                     ) : activeNav === "reports" ? (
@@ -1578,16 +2040,22 @@ export default function NGODashboard() {
                                 onConfirm={(id) => deleteProject(id)}
                             />
                         </>
+                    ) : activeNav === "partnerships" ? (
+                        <ActivePartnershipsPage 
+                            key="active-partnerships"
+                            fundUtilModal={fundUtilModal}
+                            setFundUtilModal={setFundUtilModal}
+                        />
                     ) : activeNav === "connections" ? (
                         <>
                             {alert && (
                                 <div className="max-w-xl mx-auto">
                                     <div
                                         className={`p-3 rounded-md text-sm ${alert.kind === "success"
-                                            ? "bg-green-50 text-green-700"
-                                            : alert.kind === "error"
-                                                ? "bg-red-50 text-red-700"
-                                                : "bg-indigo-50 text-indigo-700"
+                                                ? "bg-green-50 text-green-700"
+                                                : alert.kind === "error"
+                                                    ? "bg-red-50 text-red-700"
+                                                    : "bg-indigo-50 text-indigo-700"
                                             }`}
                                     >
                                         {alert.text}
@@ -1607,6 +2075,26 @@ export default function NGODashboard() {
                             acceptedConnections={acceptedConnections}
                             showAlert={showAlert}
                         />
+                    ) : activeNav === "chat" ? (
+                        <PartnerChatPanel
+                            title="Partner Chat"
+                            subtitle="Stay in sync with your corporate partners"
+                            items={ngoChatItems}
+                            onOpenChat={(item) => openChatWithConnection(item.raw)}
+                            onViewDetails={(item) => {
+                                // You can implement a view details modal if needed
+                                showAlert(`Viewing details for ${item.partnerName}`, "info");
+                            }}
+                            emptyState={{
+                                title: "No chat-ready partnerships",
+                                description: "Accept a CSR request to start collaborating with corporate partners.",
+                            }}
+                            primaryActionLabel="Open Chat"
+                            secondaryActionLabel="View details"
+                            searchPlaceholder="Search corporate partner or project"
+                        />
+                    ) : activeNav === "history" ? (
+                        <HistoryPage fetchHistory={getNGOHistory} userRole="ngo" />
                     ) : activeNav === "settings" ? (
                         <SettingsPage
                             org={{ name: "Hope Foundation", darpanId: "VF-2025-011", email: "info@hope.org" }} // pass real data
@@ -1621,80 +2109,80 @@ export default function NGODashboard() {
                         />
                     ) :
                         (
-                            <>
-                                {/* Dashboard stat cards (clickable) */}
-                                <section className="grid md:grid-cols-4 gap-6">
-                                    <div
-                                        role="button"
-                                        tabIndex={0}
-                                        onClick={() => setActiveNav("funding")}
-                                        className="bg-gradient-to-br from-teal-50 to-cyan-100 rounded-2xl shadow-sm p-5 border hover:border-cyan-300 hover:shadow-lg hover:scale-105 transform-gpu transition-all duration-300 cursor-pointer"
-                                    >
-                                        <p className="text-sm text-slate-500">Total Funds</p>
-                                        <div className="flex justify-between items-center mt-1">
-                                            <h2 className="text-3xl font-extrabold text-cyan-700">
-                                                ₹
-                                                {fundData
-                                                    .reduce((sum, d) => sum + d.value, 0)
-                                                    .toLocaleString("en-IN")}
-                                            </h2>
-                                            <div className="bg-cyan-200 p-2 rounded-lg">
-                                                <HandCoins size={28} />
-                                            </div>
+                        <>
+                            {/* Dashboard stat cards (clickable) */}
+                            <section className="grid gap-6 md:grid-cols-4">
+                                <div
+                                    role="button"
+                                    tabIndex={0}
+                                    onClick={() => setActiveNav("funding")}
+                                    className="p-5 transition-all duration-300 border shadow-sm cursor-pointer bg-gradient-to-br from-teal-50 to-cyan-100 rounded-2xl hover:border-cyan-300 hover:shadow-lg hover:scale-105 transform-gpu"
+                                >
+                                    <p className="text-sm text-slate-500">Total Funds</p>
+                                    <div className="flex items-center justify-between mt-1">
+                                        <h2 className="text-3xl font-extrabold text-cyan-700">
+                                            ₹
+                                            {fundData
+                                                .reduce((sum, d) => sum + d.value, 0)
+                                                .toLocaleString("en-IN")}
+                                        </h2>
+                                        <div className="p-2 rounded-lg bg-cyan-200">
+                                            <HandCoins size={28} />
                                         </div>
                                     </div>
+                                </div>
 
-                                    <div
-                                        role="button"
-                                        tabIndex={0}
-                                        onClick={() => setActiveNav("projects")}
-                                        className="bg-gradient-to-br from-violet-50 to-purple-100 rounded-2xl shadow-sm p-5 border hover:border-violet-300 hover:shadow-lg hover:scale-105 transform-gpu transition-all duration-300 cursor-pointer"
-                                    >
-                                        <p className="text-sm text-slate-500">Active Projects</p>
-                                        <div className="flex justify-between items-center mt-1">
-                                            <h2 className="text-3xl font-extrabold text-violet-700">
+                                <div
+                                    role="button"
+                                    tabIndex={0}
+                                    onClick={() => setActiveNav("projects")}
+                                    className="p-5 transition-all duration-300 border shadow-sm cursor-pointer bg-gradient-to-br from-violet-50 to-purple-100 rounded-2xl hover:border-violet-300 hover:shadow-lg hover:scale-105 transform-gpu"
+                                >
+                                    <p className="text-sm text-slate-500">Active Projects</p>
+                                    <div className="flex items-center justify-between mt-1">
+                                        <h2 className="text-3xl font-extrabold text-violet-700">
                                                 {projects.filter((p) => p.status === "active").length}
-                                            </h2>
-                                            <div className="bg-violet-200 p-2 rounded-lg">
-                                                <FolderKanban size={28} />
-                                            </div>
+                                        </h2>
+                                        <div className="p-2 rounded-lg bg-violet-200">
+                                            <FolderKanban size={28} />
                                         </div>
                                     </div>
+                                </div>
 
-                                    <div
-                                        role="button"
-                                        tabIndex={0}
-                                        onClick={() => openConnectionsFromCard("accepted")}
-                                        className="bg-gradient-to-br from-teal-50 to-cyan-100 rounded-2xl shadow-sm p-5 border hover:border-cyan-300 hover:shadow-lg hover:scale-105 transform-gpu transition-all duration-300 cursor-pointer"
-                                    >
-                                        <p className="text-sm text-slate-500">Connections</p>
-                                        <div className="flex justify-between items-center mt-1">
-                                            <h2 className="text-3xl font-extrabold text-cyan-700">
-                                                {acceptedConnections.length}
-                                            </h2>
-                                            <div className="bg-cyan-200 p-2 rounded-lg">
-                                                <Users size={28} />
-                                            </div>
+                                <div
+                                    role="button"
+                                    tabIndex={0}
+                                    onClick={() => openConnectionsFromCard("accepted")}
+                                    className="p-5 transition-all duration-300 border shadow-sm cursor-pointer bg-gradient-to-br from-teal-50 to-cyan-100 rounded-2xl hover:border-cyan-300 hover:shadow-lg hover:scale-105 transform-gpu"
+                                >
+                                    <p className="text-sm text-slate-500">Connections</p>
+                                    <div className="flex items-center justify-between mt-1">
+                                        <h2 className="text-3xl font-extrabold text-cyan-700">
+                                            {acceptedConnections.length}
+                                        </h2>
+                                        <div className="p-2 rounded-lg bg-cyan-200">
+                                            <Users size={28} />
                                         </div>
                                     </div>
+                                </div>
 
-                                    <div
-                                        role="button"
-                                        tabIndex={0}
-                                        onClick={() => setActiveNav("connections")}
-                                        className="bg-gradient-to-br from-violet-50 to-purple-100 rounded-2xl shadow-sm p-5 border hover:border-violet-300 hover:shadow-lg hover:scale-105 transform-gpu transition-all duration-300 cursor-pointer"
-                                    >
-                                        <p className="text-sm text-slate-500">Pending Requests</p>
-                                        <div className="flex justify-between items-center mt-1">
-                                            <h2 className="text-3xl font-extrabold text-violet-700">
-                                                {dashboardStats?.pendingRequests || csrRequests.filter(r => r.status === 'pending').length}
-                                            </h2>
-                                            <div className="bg-violet-200 p-2 rounded-lg">
-                                                <TrendingUp size={28} />
-                                            </div>
+                                <div
+                                    role="button"
+                                    tabIndex={0}
+                                    onClick={() => setActiveNav("connections")}
+                                    className="p-5 transition-all duration-300 border shadow-sm cursor-pointer bg-gradient-to-br from-violet-50 to-purple-100 rounded-2xl hover:border-violet-300 hover:shadow-lg hover:scale-105 transform-gpu"
+                                >
+                                    <p className="text-sm text-slate-500">Pending Requests</p>
+                                    <div className="flex items-center justify-between mt-1">
+                                        <h2 className="text-3xl font-extrabold text-violet-700">
+                                            {dashboardStats?.pendingRequests || csrRequests.filter(r => r.status === 'pending').length}
+                                        </h2>
+                                        <div className="p-2 rounded-lg bg-violet-200">
+                                            <TrendingUp size={28} />
                                         </div>
                                     </div>
-                                </section>
+                                </div>
+                            </section>
 
                                 {/* Requests Monitor Section */}
                                 <section className="grid gap-6 lg:grid-cols-[2fr,1fr] mt-6">
@@ -1733,7 +2221,7 @@ export default function NGODashboard() {
                                                     key={metric.label}
                                                     className={`rounded-xl px-4 py-3 text-sm font-medium ${metric.tone}`}
                                                 >
-                                                    <div className="text-xs uppercase tracking-wide text-slate-500">
+                                                    <div className="text-xs tracking-wide uppercase text-slate-500">
                                                         {metric.label}
                                                     </div>
                                                     <div className="mt-2 text-2xl">
@@ -1752,7 +2240,7 @@ export default function NGODashboard() {
                                                     Showing {Math.min(csrRequests.length, 4)} of {csrRequests.length}
                                                 </span>
                                             </div>
-                                            {csrRequests.length === 0 ? (
+                                    {csrRequests.length === 0 ? (
                                                 <div className="p-4 text-sm border border-dashed rounded-lg text-slate-500">
                                                     No requests received yet. Your projects will appear here when corporates send CSR requests.
                                                 </div>
@@ -1767,11 +2255,11 @@ export default function NGODashboard() {
                                                                 <div className="text-sm font-semibold text-slate-700">
                                                                     {item.company}
                                                                 </div>
-                                                                <div className="text-xs text-slate-500 mt-1">
+                                                                <div className="mt-1 text-xs text-slate-500">
                                                                     {item.project} • {item.budget}
                                                                 </div>
                                                                 {item.message && (
-                                                                    <div className="text-xs text-slate-400 mt-1 italic line-clamp-1">
+                                                                    <div className="mt-1 text-xs italic text-slate-400 line-clamp-1">
                                                                         {item.message}
                                                                     </div>
                                                                 )}
@@ -1795,7 +2283,7 @@ export default function NGODashboard() {
 
                                         {csrRequests.filter(r => r.status === 'pending').length > 0 && (
                                             <div className="mt-6">
-                                                <h3 className="text-sm font-semibold text-slate-700 mb-2">
+                                                <h3 className="mb-2 text-sm font-semibold text-slate-700">
                                                     Pending Requests
                                                 </h3>
                                                 <div className="grid gap-3 sm:grid-cols-2">
@@ -1806,30 +2294,30 @@ export default function NGODashboard() {
                                                         >
                                                             <div className="text-sm font-medium text-slate-700">
                                                                 {item.company}
-                                                            </div>
+                                                </div>
                                                             <div className="mt-1 text-xs text-slate-500 line-clamp-2">
                                                                 {item.project}
                                                             </div>
-                                                            <div className="mt-2 flex gap-2">
-                                                                <button
+                                                            <div className="flex gap-2 mt-2">
+                                                    <button
                                                                     onClick={() => acceptConnectionRequest(item.id)}
-                                                                    className="px-2 py-1 text-xs rounded-md bg-green-600 text-white hover:bg-green-700"
-                                                                >
-                                                                    Accept
-                                                                </button>
-                                                                <button
+                                                                    className="px-2 py-1 text-xs text-white bg-green-600 rounded-md hover:bg-green-700"
+                                                    >
+                                                        Accept
+                                                    </button>
+                                                    <button
                                                                     onClick={() => declineConnectionRequest(item.id)}
-                                                                    className="px-2 py-1 text-xs rounded-md bg-red-50 text-red-600 hover:bg-red-100"
-                                                                >
-                                                                    Decline
-                                                                </button>
-                                                            </div>
-                                                        </div>
+                                                                    className="px-2 py-1 text-xs text-red-600 rounded-md bg-red-50 hover:bg-red-100"
+                                                    >
+                                                        Decline
+                                                    </button>
+                                                </div>
+                                            </div>
                                                     ))}
                                                 </div>
                                             </div>
-                                        )}
-                                    </div>
+                                    )}
+                                </div>
 
                                     <div className="p-6 bg-white border shadow-sm border-indigo-50 rounded-2xl">
                                         <div className="flex items-center justify-between mb-4">
@@ -1850,34 +2338,34 @@ export default function NGODashboard() {
                                         ) : (
                                             <div className="h-64">
                                                 <ResponsiveContainer width="100%" height="100%">
-                                                    <PieChart>
-                                                        <Pie
-                                                            data={fundData}
-                                                            dataKey="value"
-                                                            nameKey="name"
-                                                            cx="50%"
-                                                            cy="50%"
-                                                            outerRadius={90}
+                                            <PieChart>
+                                                <Pie
+                                                    data={fundData}
+                                                    dataKey="value"
+                                                    nameKey="name"
+                                                    cx="50%"
+                                                    cy="50%"
+                                                    outerRadius={90}
                                                             innerRadius={50}
                                                             paddingAngle={4}
                                                             label={({ name, value }) =>
                                                                 `${name} (₹${(value / 100000).toFixed(1)}L)`
                                                             }
-                                                        >
-                                                            {fundData.map((entry, index) => (
-                                                                <Cell key={index} fill={COLORS[index % COLORS.length]} />
-                                                            ))}
-                                                        </Pie>
+                                                >
+                                                    {fundData.map((entry, index) => (
+                                                        <Cell key={index} fill={COLORS[index % COLORS.length]} />
+                                                    ))}
+                                                </Pie>
                                                         <Tooltip formatter={(value) => `₹${value.toLocaleString('en-IN')}`} />
-                                                    </PieChart>
-                                                </ResponsiveContainer>
+                                            </PieChart>
+                                        </ResponsiveContainer>
                                             </div>
                                         )}
                                     </div>
                                 </section>
 
                                 {/* Active Projects and Recent Activity */}
-                                <section className="grid gap-6 lg:grid-cols-2 mt-6">
+                                <section className="grid gap-6 mt-6 lg:grid-cols-2">
                                     <div className="p-6 bg-white border shadow-sm border-indigo-50 rounded-2xl">
                                         <div className="flex items-center justify-between mb-4">
                                             <div>
@@ -1891,7 +2379,7 @@ export default function NGODashboard() {
                                             <FolderKanban size={20} className="text-indigo-500" />
                                         </div>
                                         {projects.filter(p => p.status === "active").length === 0 ? (
-                                            <div className="p-4 text-sm text-slate-500 border border-dashed rounded-lg">
+                                            <div className="p-4 text-sm border border-dashed rounded-lg text-slate-500">
                                                 No active projects to display yet.
                                             </div>
                                         ) : (
@@ -1906,11 +2394,11 @@ export default function NGODashboard() {
                                                                 <div className="text-sm font-semibold text-slate-700">
                                                                     {project.name}
                                                                 </div>
-                                                                <div className="text-xs text-slate-500 mt-1">
+                                                                <div className="mt-1 text-xs text-slate-500">
                                                                     {project.location} • {project.duration} months
                                                                 </div>
                                                             </div>
-                                                            <div className="text-xs text-slate-500 text-right">
+                                                            <div className="text-xs text-right text-slate-500">
                                                                 {project.fundsDisplay}
                                                             </div>
                                                         </div>
@@ -1921,17 +2409,17 @@ export default function NGODashboard() {
                                                                 <span>{Math.round(project.progress || 0)}%</span>
                                                             </div>
                                                         </div>
-                                                        <div className="mt-3 flex gap-2">
+                                                        <div className="flex gap-2 mt-3">
                                                             <button
                                                                 onClick={() => setViewProject(project)}
-                                                                className="px-3 py-1 rounded-md bg-indigo-600 text-white text-xs flex items-center gap-2 hover:bg-indigo-700"
+                                                                className="flex items-center gap-2 px-3 py-1 text-xs text-white bg-indigo-600 rounded-md hover:bg-indigo-700"
                                                             >
                                                                 <Eye size={14} />
                                                                 View
                                                             </button>
                                                             <button
                                                                 onClick={() => setEditProject(project)}
-                                                                className="px-3 py-1 rounded-md bg-slate-100 text-xs flex items-center gap-2 hover:bg-slate-200"
+                                                                className="flex items-center gap-2 px-3 py-1 text-xs rounded-md bg-slate-100 hover:bg-slate-200"
                                                             >
                                                                 <Edit2 size={14} />
                                                                 Edit
@@ -1953,10 +2441,10 @@ export default function NGODashboard() {
                                             </span>
                                         </div>
                                         <div className="relative">
-                                            <div className="absolute top-0 left-5 bottom-4 w-px bg-slate-200" />
+                                            <div className="absolute top-0 w-px left-5 bottom-4 bg-slate-200" />
                                             <ul className="space-y-4">
                                                 {connectionHistory.length === 0 ? (
-                                                    <li className="text-sm text-slate-500 pl-8">
+                                                    <li className="pl-8 text-sm text-slate-500">
                                                         No recent activity to display.
                                                     </li>
                                                 ) : (
@@ -1970,7 +2458,7 @@ export default function NGODashboard() {
                                                                     <span className="font-medium">{item.company}</span> • {item.action}
                                                                 </div>
                                                                 {item.note && (
-                                                                    <div className="text-xs text-slate-400 mt-1">
+                                                                    <div className="mt-1 text-xs text-slate-400">
                                                                         {item.note}
                                                                     </div>
                                                                 )}
@@ -1982,20 +2470,40 @@ export default function NGODashboard() {
                                                     ))
                                                 )}
                                             </ul>
-                                        </div>
                                     </div>
-                                </section>
-                            </>
+                                </div>
+                            </section>
+                        </>
                         )}
                     </>
                     )}
                 </main>
 
                 {/* Footer */}
-                <footer className="text-center text-slate-500 text-sm pb-6">
-                    © 2025 <span className="text-purple-600 font-semibold">Kartvya CSR Dashboard</span> | Empowering NGOs 💜
+                <footer className="pb-6 text-sm text-center text-slate-500">
+                    © 2025 <span className="font-semibold text-purple-600">Kartvya CSR Dashboard</span> | Empowering NGOs 💜
                 </footer>
             </div>
+
+        <ChatDrawer
+            open={chatPanel.open}
+            onClose={resetChatPanel}
+            partnershipId={chatPanel.partnershipId}
+            partnerName={chatPanel.partnerName}
+            partnerSubtitle={chatPanel.partnerSubtitle}
+            partnerAvatar={chatPanel.partnerAvatar}
+            currentUserId={userProfile?.user?.id}
+            currentUserRole="ngo"
+        />
+
+        {/* Fund Utilization Modal - Rendered at parent level to persist across re-renders */}
+        {fundUtilModal.open && fundUtilModal.partnership && (
+            <FundUtilizationModal
+                fundUtilModal={fundUtilModal}
+                setFundUtilModal={setFundUtilModal}
+                showAlert={showAlert}
+            />
+        )}
 
             {/* Global alerts (inline) */}
             {alert && (
@@ -2006,3 +2514,312 @@ export default function NGODashboard() {
         </div>
     );
 }
+
+// Fund Utilization Modal Component - Extracted to prevent re-creation
+// Form state is managed internally to prevent parent re-renders on every keystroke
+const FundUtilizationModal = memo(function FundUtilizationModal({ fundUtilModal, setFundUtilModal, showAlert }) {
+    const [submitting, setSubmitting] = useState(false);
+    const [fundUtilForm, setFundUtilForm] = useState({
+        category: "",
+        description: "",
+        amount_used: "",
+        utilization_date: new Date().toISOString().slice(0, 10),
+        photos: [],
+    });
+    
+    // Reset form when modal opens for a new partnership
+    useEffect(() => {
+        if (fundUtilModal.open && fundUtilModal.partnership) {
+            setFundUtilForm({
+                category: "",
+                description: "",
+                amount_used: "",
+                utilization_date: new Date().toISOString().slice(0, 10),
+                photos: [],
+            });
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [fundUtilModal.open, fundUtilModal.partnership?.id]);
+
+    const CATEGORIES = [
+        { value: "infrastructure", label: "Infrastructure" },
+        { value: "staff", label: "Staff & Salaries" },
+        { value: "materials", label: "Materials & Supplies" },
+        { value: "operations", label: "Operations" },
+        { value: "marketing", label: "Marketing & Outreach" },
+        { value: "training", label: "Training & Development" },
+        { value: "other", label: "Other" },
+    ];
+
+    const handlePhotoUpload = (e) => {
+        // Don't prevent default - we need the file input to work normally
+        e.stopPropagation(); // Only stop propagation to prevent modal from closing
+        
+        const files = e.target.files;
+        if (!files || files.length === 0) {
+            return;
+        }
+
+        const fileArray = Array.from(files);
+        const readerPromises = fileArray.map(file => {
+            // Validate file type
+            if (!file.type.startsWith('image/')) {
+                showAlert(`File ${file.name} is not an image`, "error");
+                return null;
+            }
+            
+            // Validate file size (max 5MB)
+            if (file.size > 5 * 1024 * 1024) {
+                showAlert(`File ${file.name} is too large. Maximum size is 5MB`, "error");
+                return null;
+            }
+
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result);
+                reader.onerror = () => reject(new Error(`Failed to read ${file.name}`));
+                reader.readAsDataURL(file);
+            });
+        });
+
+        Promise.all(readerPromises.filter(p => p !== null))
+            .then(base64Images => {
+                if (base64Images.length > 0) {
+                    setFundUtilForm(prev => ({
+                        ...prev,
+                        photos: [...prev.photos, ...base64Images]
+                    }));
+                    showAlert(`✅ ${base64Images.length} image(s) added`, "success");
+                }
+            })
+            .catch(error => {
+                console.error('Error reading images:', error);
+                showAlert(`Failed to process images: ${error.message}`, "error");
+            });
+        
+        // Reset input to allow selecting the same file again
+        e.target.value = '';
+    };
+
+    const removePhoto = (index) => {
+        setFundUtilForm(prev => ({
+            ...prev,
+            photos: prev.photos.filter((_, i) => i !== index)
+        }));
+    };
+
+    const handleFundUtilSubmit = async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!fundUtilModal.partnership) return;
+
+        const { partnership } = fundUtilModal;
+        if (!fundUtilForm.category || !fundUtilForm.description || !fundUtilForm.amount_used) {
+            showAlert("Please fill all required fields", "error");
+            return;
+        }
+
+        const amount = parseFloat(fundUtilForm.amount_used);
+        if (amount <= 0) {
+            showAlert("Amount must be greater than 0", "error");
+            return;
+        }
+
+        try {
+            setSubmitting(true);
+            const response = await addFundUtilization(partnership.id, {
+                category: fundUtilForm.category,
+                description: fundUtilForm.description,
+                amount_used: amount,
+                utilization_date: fundUtilForm.utilization_date,
+                photos: fundUtilForm.photos,
+            });
+
+            if (response.success) {
+                const updatedProgress = response.data?.updated_progress || 0;
+                showAlert(`✅ Fund utilization added! Progress updated to ${updatedProgress}%`, "success");
+                
+                // Close modal and reset form only after successful submission
+                setFundUtilModal({ open: false, partnership: null });
+                setFundUtilForm({
+                    category: "",
+                    description: "",
+                    amount_used: "",
+                    utilization_date: new Date().toISOString().slice(0, 10),
+                    photos: [],
+                });
+                // Trigger a custom event to notify ActivePartnershipsPage to refresh
+                window.dispatchEvent(new CustomEvent('partnershipUpdated', { detail: { partnershipId: partnership.id, progress: updatedProgress } }));
+            }
+        } catch (error) {
+            console.error('Error adding fund utilization:', error);
+            showAlert(`Failed to add fund utilization: ${error.message}`, "error");
+            // Don't close modal on error - let user fix and retry
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div 
+                className="absolute inset-0 bg-black/30" 
+                onClick={(e) => {
+                    // Only close if clicking directly on backdrop, not on form
+                    if (e.target === e.currentTarget) {
+                        setFundUtilModal({ open: false, partnership: null });
+                    }
+                }} 
+            />
+            <form 
+                onSubmit={handleFundUtilSubmit} 
+                onClick={(e) => e.stopPropagation()}
+                className="relative z-10 w-full max-w-2xl bg-white shadow-xl rounded-xl p-6 max-h-[90vh] overflow-y-auto"
+            >
+                <div className="flex items-center justify-between mb-4">
+                    <div>
+                        <h3 className="text-lg font-semibold text-slate-800">
+                            Add Fund Utilization
+                        </h3>
+                        <p className="mt-1 text-sm text-slate-500">
+                            {fundUtilModal.partnership.project_name || fundUtilModal.partnership.partnership_name || "Partnership"}
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => setFundUtilModal({ open: false, partnership: null })}
+                        className="text-slate-500 hover:text-slate-700"
+                    >
+                        <X size={20} />
+                    </button>
+                </div>
+
+                <div className="space-y-4">
+                    <div>
+                        <label className="block mb-1 text-sm font-medium text-slate-700">Category *</label>
+                        <select
+                            value={fundUtilForm.category}
+                            onChange={(e) => setFundUtilForm(prev => ({ ...prev, category: e.target.value }))}
+                            className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            required
+                        >
+                            <option value="">Select Category</option>
+                            {CATEGORIES.map(cat => (
+                                <option key={cat.value} value={cat.value}>{cat.label}</option>
+                            ))}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label className="block mb-1 text-sm font-medium text-slate-700">Description *</label>
+                        <textarea
+                            value={fundUtilForm.description}
+                            onChange={(e) => setFundUtilForm(prev => ({ ...prev, description: e.target.value }))}
+                            placeholder="Describe what the funds were used for..."
+                            className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            rows={3}
+                            required
+                        />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="block mb-1 text-sm font-medium text-slate-700">Amount Used (₹) *</label>
+                            <input
+                                type="number"
+                                value={fundUtilForm.amount_used}
+                                onChange={(e) => setFundUtilForm(prev => ({ ...prev, amount_used: e.target.value }))}
+                                placeholder="0.00"
+                                className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                min="0"
+                                step="0.01"
+                                required
+                            />
+                        </div>
+                        <div>
+                            <label className="block mb-1 text-sm font-medium text-slate-700">Date *</label>
+                            <input
+                                type="date"
+                                value={fundUtilForm.utilization_date}
+                                onChange={(e) => setFundUtilForm(prev => ({ ...prev, utilization_date: e.target.value }))}
+                                className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                required
+                            />
+                        </div>
+                    </div>
+
+                    <div>
+                        <label className="block mb-2 text-sm font-medium text-slate-700">Photos (Optional)</label>
+                        <input
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            onChange={handlePhotoUpload}
+                            onClick={(e) => e.stopPropagation()}
+                            className="hidden"
+                            id="photo-upload"
+                        />
+                        <label
+                            htmlFor="photo-upload"
+                            className="flex items-center justify-center w-full gap-2 px-4 py-8 transition-colors border-2 border-dashed rounded-lg cursor-pointer border-slate-300 hover:border-indigo-500 hover:bg-indigo-50/50"
+                        >
+                            <Camera size={24} className="text-slate-400" />
+                            <span className="text-sm text-slate-600">Click to upload photos or drag and drop</span>
+                        </label>
+                        {fundUtilForm.photos.length > 0 && (
+                            <div className="grid grid-cols-4 gap-2 mt-3">
+                                {fundUtilForm.photos.map((photo, idx) => (
+                                    <div key={idx} className="relative group">
+                                        <img src={photo} alt={`Preview ${idx + 1}`} className="object-cover w-full h-20 border rounded-lg border-slate-200" />
+                                        <button
+                                            type="button"
+                                            onClick={() => removePhoto(idx)}
+                                            className="absolute flex items-center justify-center w-5 h-5 text-white transition-opacity bg-red-500 rounded-full opacity-0 top-1 right-1 group-hover:opacity-100"
+                                        >
+                                            <X size={12} />
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="p-3 border border-indigo-200 rounded-lg bg-indigo-50">
+                        <p className="text-xs text-indigo-700">
+                            <strong>Note:</strong> Progress will be automatically calculated based on the amount used. 
+                            Current budget: ₹{Number(fundUtilModal.partnership.agreed_budget || 0).toLocaleString('en-IN')}
+                        </p>
+                    </div>
+                </div>
+
+                <div className="flex justify-end gap-3 mt-6">
+                    <button
+                        type="button"
+                        onClick={() => setFundUtilModal({ open: false, partnership: null })}
+                        className="px-4 py-2 text-sm font-medium border rounded-lg border-slate-300 hover:bg-slate-50"
+                        disabled={submitting}
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="submit"
+                        className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+                        disabled={submitting}
+                    >
+                        {submitting ? (
+                            <>
+                                <Loader2 size={16} className="animate-spin" />
+                                Adding...
+                            </>
+                        ) : (
+                            <>
+                                <PlusCircle size={16} />
+                                Add Utilization
+                            </>
+                        )}
+                    </button>
+                </div>
+            </form>
+        </div>
+    );
+});
