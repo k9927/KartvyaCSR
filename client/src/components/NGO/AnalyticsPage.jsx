@@ -93,7 +93,8 @@ export default function AnalyticsPage({
 
     const map = {};
     connectionHistory.forEach(h => {
-      if (h.action !== "Donation") return;
+      // Accept both "Donation" and "Partnership" actions
+      if (h.action !== "Donation" && h.action !== "Partnership") return;
       const dt = h.date ? new Date(h.date + "T00:00:00") : new Date();
       if (dt < s || dt > e) return;
       if (donorFilter && h.company !== donorFilter) return;
@@ -104,7 +105,7 @@ export default function AnalyticsPage({
     });
 
     const arr = Object.keys(map).sort().map(k => ({ month: k, funds: map[k] }));
-    return arr;
+    return arr.length > 0 ? arr : [{ month: new Date().toISOString().slice(0, 7), funds: 0 }];
   }, [connectionHistory, startDate, endDate, donorFilter]);
 
 
@@ -115,7 +116,8 @@ export default function AnalyticsPage({
 
     const map = {};
     connectionHistory.forEach(h => {
-      if (h.action !== "Donation") return;
+      // Accept both "Donation" and "Partnership" actions
+      if (h.action !== "Donation" && h.action !== "Partnership") return;
       const dt = h.date ? new Date(h.date + "T00:00:00") : new Date();
       if (dt < s || dt > e) return;
       const donor = h.company || "Unknown Donor";
@@ -257,15 +259,21 @@ export default function AnalyticsPage({
         <div className="bg-white rounded-2xl p-4 border shadow-sm">
           <h3 className="font-semibold mb-4">Funds Over Time</h3>
           <div className="w-full h-[260px] sm:h-[300px] md:h-[320px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={fundsOverTime}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="month" />
-                <YAxis tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}k`} />
-                <Tooltip formatter={(v) => `₹${v.toLocaleString("en-IN")}`} />
-                <Line type="monotone" dataKey="funds" stroke="#14b8a6" strokeWidth={3} dot />
-              </LineChart>
-            </ResponsiveContainer>
+            {fundsOverTime.length > 0 && fundsOverTime.some(d => d.funds > 0) ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={fundsOverTime}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="month" />
+                  <YAxis tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}k`} />
+                  <Tooltip formatter={(v) => `₹${v.toLocaleString("en-IN")}`} />
+                  <Line type="monotone" dataKey="funds" stroke="#14b8a6" strokeWidth={3} dot />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex items-center justify-center h-full text-slate-400">
+                <p>No data available</p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -273,30 +281,36 @@ export default function AnalyticsPage({
         <div className="bg-white rounded-2xl p-4 border shadow-sm">
           <h3 className="font-semibold mb-4">Top Donors</h3>
           <div className="w-full h-[260px] sm:h-[300px] md:h-[320px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={donorsAgg.slice(0, 6)} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis type="number" />
-                <YAxis type="category" dataKey="donor" width={120} />
-                <Tooltip formatter={(v) => `₹${v.toLocaleString("en-IN")}`} />
-                <Bar dataKey="funds" onClick={(data) => handleDonorClick(data.donor)}>
-                  {donorsAgg.slice(0, 6).map((entry, i) => (
-                    <Cell
-                      key={i}
-                      fill={
-                        donorFilter === entry.donor
-                          ? "#8b5cf6"
-                          : hoveredDonor === entry.donor
-                            ? "#ec4899"
-                            : "#6366f1"
-                      }
-                      onMouseOver={() => setHoveredDonor(entry.donor)}
-                      onMouseOut={() => setHoveredDonor(null)}
-                    />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
+            {donorsAgg.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={donorsAgg.slice(0, 6)} layout="vertical">
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis type="number" />
+                  <YAxis type="category" dataKey="donor" width={120} />
+                  <Tooltip formatter={(v) => `₹${v.toLocaleString("en-IN")}`} />
+                  <Bar dataKey="funds" onClick={(data) => handleDonorClick(data.donor)}>
+                    {donorsAgg.slice(0, 6).map((entry, i) => (
+                      <Cell
+                        key={i}
+                        fill={
+                          donorFilter === entry.donor
+                            ? "#8b5cf6"
+                            : hoveredDonor === entry.donor
+                              ? "#ec4899"
+                              : "#6366f1"
+                        }
+                        onMouseOver={() => setHoveredDonor(entry.donor)}
+                        onMouseOut={() => setHoveredDonor(null)}
+                      />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex items-center justify-center h-full text-slate-400">
+                <p>No data available</p>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -305,57 +319,71 @@ export default function AnalyticsPage({
       <div className="bg-white rounded-2xl p-4 border shadow-sm">
         <h3 className="font-semibold mb-4">Donor Distribution</h3>
         <div className="w-full h-[260px] sm:h-[300px] md:h-[320px]">
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie
-                data={donorPie}
-                dataKey="value"
-                nameKey="name"
-                cx="50%"
-                cy="50%"
-                outerRadius="75%"
-                labelLine={false} // disable label lines
-              >
-                {donorPie.map((entry, i) => (
-                  <Cell
-                    key={i}
-                    fill={["#14b8a6", "#ec4899", "#8b5cf6", "#06b6d4", "#f59e0b"][i % 5]}
-                  />
-                ))}
-              </Pie>
-              <Tooltip formatter={(v) => `₹${v.toLocaleString("en-IN")}`} />
-            </PieChart>
-          </ResponsiveContainer>
+          {donorPie.length > 0 ? (
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={donorPie}
+                  dataKey="value"
+                  nameKey="name"
+                  cx="50%"
+                  cy="50%"
+                  outerRadius="75%"
+                  labelLine={false} // disable label lines
+                >
+                  {donorPie.map((entry, i) => (
+                    <Cell
+                      key={i}
+                      fill={["#14b8a6", "#ec4899", "#8b5cf6", "#06b6d4", "#f59e0b"][i % 5]}
+                    />
+                  ))}
+                </Pie>
+                <Tooltip formatter={(v) => `₹${v.toLocaleString("en-IN")}`} />
+              </PieChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex items-center justify-center h-full text-slate-400">
+              <p>No data available</p>
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="mt-2 max-h-20 overflow-y-auto text-xs text-slate-500">
-        {donorPie.map(d => (
-          <div key={d.name} className="flex justify-between">
-            <span className="truncate">{d.name}</span>
-            <span>₹{d.value.toLocaleString("en-IN")}</span>
-          </div>
-        ))}
-      </div>
+      {donorPie.length > 0 && (
+        <div className="mt-2 max-h-20 overflow-y-auto text-xs text-slate-500">
+          {donorPie.map(d => (
+            <div key={d.name} className="flex justify-between">
+              <span className="truncate">{d.name}</span>
+              <span>₹{d.value.toLocaleString("en-IN")}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Recent Activity */}
       <div>
         <h3 className="font-semibold mb-2">Recent Activity</h3>
         <div className="space-y-2">
-          {connectionHistory.slice(0, 6).map((h) => (
-            <div
-              key={h.id}
-              className="flex justify-between bg-slate-50 p-3 rounded border"
-            >
-              <div>
-                <p className="font-medium text-sm">
-                  {h.company} — {h.action}
-                </p>
-                <p className="text-xs text-slate-500">{h.note}</p>
+          {connectionHistory.length > 0 ? (
+            connectionHistory.slice(0, 6).map((h) => (
+              <div
+                key={h.id}
+                className="flex justify-between bg-slate-50 p-3 rounded border"
+              >
+                <div>
+                  <p className="font-medium text-sm">
+                    {h.company} — {h.action}
+                  </p>
+                  <p className="text-xs text-slate-500">{h.note}</p>
+                </div>
+                <p className="text-xs text-slate-400">{h.date}</p>
               </div>
-              <p className="text-xs text-slate-400">{h.date}</p>
+            ))
+          ) : (
+            <div className="bg-slate-50 p-3 rounded border text-center text-slate-400">
+              <p>No recent activity</p>
             </div>
-          ))}
+          )}
         </div>
       </div>
     </div>

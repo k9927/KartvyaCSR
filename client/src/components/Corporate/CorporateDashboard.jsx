@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, memo } from "react";
 import { useNavigate } from "react-router-dom";
 import {
     PieChart,
@@ -205,12 +205,16 @@ const normalizePartnership = (record) => {
         location: record.project_location ?? record.location ?? "N/A",
         duration: record.duration_months ?? record.duration ?? 0,
         funds,
+        agreed_budget: funds, // Preserve for Analytics calculations
         fundsDisplay: formatCurrency(funds),
-        progress: Number(record.progress ?? 0),
+        progress: Number(record.calculated_progress ?? record.progress ?? 0),
         beneficiaries: Number(record.beneficiaries_count ?? 0),
         startDate: record.start_date ?? null,
         endDate: record.end_date ?? null,
         description: record.project_description ?? "",
+        // Preserve fund utilization data from server
+        total_funds_utilized: Number(record.total_funds_utilized ?? 0),
+        total_utilized: Number(record.total_funds_utilized ?? record.total_utilized ?? 0),
     };
 };
 
@@ -582,6 +586,25 @@ export default function CorporateDashboard() {
             console.error("Failed to refresh corporate stats", error);
         }
     }, []);
+
+    const refreshPartnerships = useCallback(async () => {
+        try {
+            const response = await getCorporatePartnerships();
+            const partnershipsData = extractArray(response, "partnerships")
+                .map(normalizePartnership)
+                .filter(Boolean);
+            setPartnershipProjects(partnershipsData);
+        } catch (error) {
+            console.error("Failed to refresh partnerships", error);
+        }
+    }, []);
+
+    // Refresh partnerships when Analytics page is viewed to get latest fund utilization data
+    useEffect(() => {
+        if (activeNav === "analytics") {
+            refreshPartnerships();
+        }
+    }, [activeNav, refreshPartnerships]);
 
     const refreshShortlist = useCallback(async () => {
         try {
@@ -1127,13 +1150,6 @@ export default function CorporateDashboard() {
                                         </div>
                                         <div className="mt-3 flex gap-2">
                                             <button
-                                                onClick={() => openChatWithProject(project)}
-                                                className="px-3 py-1 rounded-md bg-indigo-600 text-white text-xs flex items-center gap-2"
-                                            >
-                                                <MessageCircle size={14} />
-                                                Message
-                                            </button>
-                                            <button
                                                 onClick={() => setViewProject(project)}
                                                 className="px-3 py-1 rounded-md bg-slate-100 text-xs flex items-center gap-2"
                                             >
@@ -1285,9 +1301,12 @@ export default function CorporateDashboard() {
         const searchRef = useRef(null);
 
         useEffect(() => {
-            const timer = setTimeout(() => searchRef.current?.focus?.(), 80);
-            return () => clearTimeout(timer);
-        }, []);
+            // Only auto-focus search if no modal is open
+            if (!requestModal.open && !viewProject) {
+                const timer = setTimeout(() => searchRef.current?.focus?.(), 80);
+                return () => clearTimeout(timer);
+            }
+        }, [requestModal.open, viewProject]);
 
         return (
             <div className="bg-white rounded-2xl shadow-lg p-6 border border-indigo-50">
@@ -1561,9 +1580,12 @@ export default function CorporateDashboard() {
 
     function ConnectionsPage() {
         useEffect(() => {
-            const timer = setTimeout(() => connectionsSearchRef.current?.focus?.(), 80);
-            return () => clearTimeout(timer);
-        }, []);
+            // Only auto-focus search if no modal is open
+            if (!requestModal.open) {
+                const timer = setTimeout(() => connectionsSearchRef.current?.focus?.(), 80);
+                return () => clearTimeout(timer);
+            }
+        }, [requestModal.open]);
 
         return (
             <div className="space-y-6">
@@ -2239,103 +2261,6 @@ export default function CorporateDashboard() {
         );
     }
 
-    function SendRequestModal({ ngo, onClose }) {
-        const [amount, setAmount] = useState("");
-        const [message, setMessage] = useState("");
-
-        if (!ngo) return null;
-
-        const handleSubmit = async (e) => {
-            e.preventDefault();
-            const numericAmount = parseInt(amount.replace(/\D/g, ""), 10) || 0;
-            if (!numericAmount) {
-                showAlert("Please provide a valid funding amount.", "error");
-                return;
-            }
-            await sendRequest({ ngo, amount: numericAmount, message });
-            setAmount("");
-            setMessage("");
-            onClose();
-        };
-
-        return (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-                <div className="absolute inset-0 bg-black/30" onClick={onClose} />
-                <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-xl p-6 z-10">
-                    <div className="flex items-center justify-between mb-4">
-                        <div>
-                            <h3 className="text-lg font-semibold text-slate-800">
-                                Send Request — {ngo.name}
-                            </h3>
-                            <p className="text-sm text-slate-500">
-                                Share funding intent and objectives
-                            </p>
-                        </div>
-                        <button onClick={onClose}>
-                            <X size={18} />
-                        </button>
-                    </div>
-
-                    <form onSubmit={handleSubmit} className="space-y-4">
-                        {ngo.project && (
-                            <div className="border border-indigo-100 bg-indigo-50/30 rounded-xl p-4 space-y-1">
-                                <div className="text-sm font-semibold text-slate-700">
-                                    {ngo.project.name}
-                                </div>
-                                <div className="text-xs text-slate-500">
-                                    Needs: {ngo.project.fundsDisplay} • Beneficiaries:{" "}
-                                    {ngo.project.beneficiaries.toLocaleString("en-IN")}
-                                </div>
-                                <div className="text-xs text-slate-500">
-                                    {ngo.project.description || "No public description shared yet."}
-                                </div>
-                            </div>
-                        )}
-                        <div>
-                            <label className="text-xs text-slate-500 block mb-1">
-                                Funding Amount (₹)
-                            </label>
-                            <input
-                                value={amount}
-                                onChange={(e) => setAmount(e.target.value)}
-                                placeholder="e.g. ₹ 20,00,000"
-                                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                            />
-                        </div>
-
-                        <div>
-                            <label className="text-xs text-slate-500 block mb-1">
-                                Message / Objective
-                            </label>
-                            <textarea
-                                value={message}
-                                onChange={(e) => setMessage(e.target.value)}
-                                placeholder="Share your CSR objectives or expectations..."
-                                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm min-h-[120px] focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                            />
-                        </div>
-
-                        <div className="flex justify-end gap-2">
-                            <button
-                                type="button"
-                                onClick={onClose}
-                                className="px-4 py-2 rounded-lg text-sm bg-slate-100 text-slate-600 hover:bg-slate-200"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                type="submit"
-                                className="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-500 flex items-center gap-2"
-                            >
-                                <Send size={16} />
-                                Send Request
-                            </button>
-                        </div>
-                    </form>
-                </div>
-            </div>
-        );
-    }
 
     function NgoProfileModal({ ngo, onClose }) {
         const [fullProfile, setFullProfile] = useState(null);
@@ -2875,6 +2800,8 @@ export default function CorporateDashboard() {
                 <SendRequestModal
                     ngo={requestModal.ngo}
                     onClose={() => setRequestModal({ open: false, ngo: null })}
+                    sendRequest={sendRequest}
+                    showAlert={showAlert}
                 />
             )}
 
@@ -2884,3 +2811,200 @@ export default function CorporateDashboard() {
         </div>
     );
 }
+
+// Send Request Modal Component - Extracted to prevent re-creation
+// Form state is managed internally to prevent parent re-renders on every keystroke
+const SendRequestModal = memo(function SendRequestModal({ ngo, onClose, sendRequest, showAlert }) {
+    const [amount, setAmount] = useState("");
+    const [message, setMessage] = useState("");
+    const modalRef = useRef(null);
+    const amountInputRef = useRef(null);
+
+    // Reset form when modal opens for a new NGO
+    useEffect(() => {
+        if (ngo) {
+            setAmount("");
+            setMessage("");
+            // Focus the amount input when modal opens
+            setTimeout(() => {
+                amountInputRef.current?.focus();
+            }, 100);
+        }
+    }, [ngo?.ngoId]);
+
+    // Trap focus within the modal and prevent background elements from receiving focus
+    useEffect(() => {
+        if (!ngo) return;
+
+        const modal = modalRef.current;
+        if (!modal) return;
+
+        // Prevent focus from escaping to background elements
+        const preventFocusEscape = (e) => {
+            // If focus moves outside the modal, bring it back
+            if (!modal.contains(e.target) && e.target !== document.body) {
+                e.preventDefault();
+                e.stopPropagation();
+                amountInputRef.current?.focus();
+            }
+        };
+
+        const handleTabKey = (e) => {
+            if (e.key !== 'Tab') return;
+            
+            const focusableElements = modal.querySelectorAll(
+                'input, textarea, button, [href], select, [tabindex]:not([tabindex="-1"])'
+            );
+            const firstElement = focusableElements[0];
+            const lastElement = focusableElements[focusableElements.length - 1];
+
+            if (e.shiftKey) {
+                if (document.activeElement === firstElement) {
+                    e.preventDefault();
+                    lastElement?.focus();
+                }
+            } else {
+                if (document.activeElement === lastElement) {
+                    e.preventDefault();
+                    firstElement?.focus();
+                }
+            }
+        };
+
+        // Block all focus events on background elements while modal is open
+        const blockBackgroundFocus = (e) => {
+            if (!modal.contains(e.target) && e.target !== document.body) {
+                e.preventDefault();
+                e.stopPropagation();
+                amountInputRef.current?.focus();
+                return false;
+            }
+        };
+
+        // Add event listeners
+        document.addEventListener('focusin', preventFocusEscape, true);
+        document.addEventListener('focus', blockBackgroundFocus, true);
+        modal.addEventListener('keydown', handleTabKey);
+
+        return () => {
+            document.removeEventListener('focusin', preventFocusEscape, true);
+            document.removeEventListener('focus', blockBackgroundFocus, true);
+            modal.removeEventListener('keydown', handleTabKey);
+        };
+    }, [ngo]);
+
+    if (!ngo) return null;
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        const numericAmount = parseInt(amount.replace(/\D/g, ""), 10) || 0;
+        if (!numericAmount) {
+            showAlert("Please provide a valid funding amount.", "error");
+            return;
+        }
+        await sendRequest({ ngo, amount: numericAmount, message });
+        setAmount("");
+        setMessage("");
+        onClose();
+    };
+
+    return (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+            <div 
+                className="absolute inset-0 bg-black/30" 
+                onClick={(e) => {
+                    // Only close if clicking directly on backdrop, not on form
+                    if (e.target === e.currentTarget) {
+                        onClose();
+                    }
+                }} 
+            />
+            <form 
+                ref={modalRef}
+                onSubmit={handleSubmit} 
+                onClick={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
+                className="relative bg-white rounded-2xl shadow-xl w-full max-w-xl p-6 z-10"
+            >
+                <div className="flex items-center justify-between mb-4">
+                    <div>
+                        <h3 className="text-lg font-semibold text-slate-800">
+                            Send Request — {ngo.name}
+                        </h3>
+                        <p className="text-sm text-slate-500">
+                            Share funding intent and objectives
+                        </p>
+                    </div>
+                    <button 
+                        type="button"
+                        onClick={onClose}
+                        className="text-slate-500 hover:text-slate-700"
+                    >
+                        <X size={18} />
+                    </button>
+                </div>
+
+                <div className="space-y-4">
+                    {ngo.project && (
+                        <div className="border border-indigo-100 bg-indigo-50/30 rounded-xl p-4 space-y-1">
+                            <div className="text-sm font-semibold text-slate-700">
+                                {ngo.project.name}
+                            </div>
+                            <div className="text-xs text-slate-500">
+                                Needs: {ngo.project.fundsDisplay} • Beneficiaries:{" "}
+                                {ngo.project.beneficiaries.toLocaleString("en-IN")}
+                            </div>
+                            <div className="text-xs text-slate-500">
+                                {ngo.project.description || "No public description shared yet."}
+                            </div>
+                        </div>
+                    )}
+                    <div>
+                        <label className="text-xs text-slate-500 block mb-1">
+                            Funding Amount (₹)
+                        </label>
+                        <input
+                            ref={amountInputRef}
+                            type="text"
+                            value={amount}
+                            onChange={(e) => setAmount(e.target.value)}
+                            onFocus={(e) => e.stopPropagation()}
+                            placeholder="e.g. ₹ 20,00,000"
+                            className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                    </div>
+
+                    <div>
+                        <label className="text-xs text-slate-500 block mb-1">
+                            Message / Objective
+                        </label>
+                        <textarea
+                            value={message}
+                            onChange={(e) => setMessage(e.target.value)}
+                            onFocus={(e) => e.stopPropagation()}
+                            placeholder="Share your CSR objectives or expectations..."
+                            className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm min-h-[120px] focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+                        />
+                    </div>
+
+                    <div className="flex justify-end gap-2">
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            className="px-4 py-2 rounded-lg text-sm bg-slate-100 text-slate-600 hover:bg-slate-200"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            type="submit"
+                            className="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-500 flex items-center gap-2"
+                        >
+                            <Send size={16} />
+                            Send Request
+                        </button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    );
+});

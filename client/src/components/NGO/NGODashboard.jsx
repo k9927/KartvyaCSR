@@ -132,21 +132,69 @@ export default function NGODashboard() {
                 };
                 setAcceptedConnections(prev => [newConn, ...prev]);
 
-                // add to connection history
-                setConnectionHistory(prev => [{ id: Date.now() + 1, company: req.company, action: "Accepted", note: req.project, date: new Date().toISOString().slice(0, 10) }, ...prev]);
-
                 // Refresh notifications and data
                 await fetchNotifications();
 
-                // Refresh data
-                const partnershipsResponse = await getNGOPartnerships({ status: 'active' });
-                if (partnershipsResponse.success && partnershipsResponse.data) {
-                    const parts = partnershipsResponse.data.partnerships || partnershipsResponse.data;
-                    const fundDataList = parts.map((p, idx) => ({
+                // Refresh partnerships and rebuild connectionHistory with proper data for charts
+                // Fetch both active and completed partnerships for full history
+                const [activeResponse, completedResponse] = await Promise.all([
+                    getNGOPartnerships({ status: 'active', limit: 100 }),
+                    getNGOPartnerships({ status: 'completed', limit: 100 })
+                ]);
+                
+                // Combine active and completed partnerships
+                const activeParts = activeResponse.success && activeResponse.data 
+                    ? (activeResponse.data.partnerships || activeResponse.data) 
+                    : [];
+                const completedParts = completedResponse.success && completedResponse.data 
+                    ? (completedResponse.data.partnerships || completedResponse.data) 
+                    : [];
+                const allParts = [...activeParts, ...completedParts];
+                
+                if (allParts.length > 0) {
+                    const parts = allParts;
+                    
+                    // Fetch fund utilization for each partnership
+                    const partnershipsWithUtilization = await Promise.all(
+                        parts.map(async (p) => {
+                            try {
+                                const utilResponse = await getPartnershipFundUtilization(p.id);
+                                if (utilResponse.success && utilResponse.data) {
+                                    const summary = utilResponse.data.summary || {};
+                                    return {
+                                        ...p,
+                                        total_utilized: parseFloat(summary.total_utilized || 0),
+                                        total_funds_utilized: parseFloat(summary.total_utilized || 0),
+                                    };
+                                }
+                                return { ...p, total_utilized: 0, total_funds_utilized: 0 };
+                            } catch (error) {
+                                console.error(`Error fetching utilization for partnership ${p.id}:`, error);
+                                return { ...p, total_utilized: 0, total_funds_utilized: 0 };
+                            }
+                        })
+                    );
+                    
+                    // Store partnerships for Analytics with utilization data
+                    setPartnerships(partnershipsWithUtilization);
+                    
+                    // Update fund data
+                    const fundDataList = partnershipsWithUtilization.map((p, idx) => ({
                         name: p.company_name || `Partner ${idx + 1}`,
                         value: parseFloat(p.agreed_budget || 0),
                     }));
                     setFundData(fundDataList);
+                    
+                    // Rebuild connectionHistory from partnerships with proper format for charts
+                    const historyEntries = partnershipsWithUtilization.map(p => ({
+                        id: p.id,
+                        company: p.company_name || "Unknown Company",
+                        action: "Partnership", // Use "Partnership" action for chart compatibility
+                        note: `Partnership for ${p.project_name || p.partnership_name || "project"} - Budget: ₹${Number(p.agreed_budget || 0).toLocaleString('en-IN')}`,
+                        date: p.start_date || p.created_at ? new Date(p.start_date || p.created_at).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
+                        amount: parseFloat(p.agreed_budget || 0), // Include amount for Funds Over Time chart
+                    }));
+                    setConnectionHistory(historyEntries);
                 }
 
                 showAlert(`✅ Accepted connection from ${req.company}`, "success");
@@ -397,22 +445,32 @@ export default function NGODashboard() {
                     // Notifications will be created by the useEffect that monitors csrRequests
                 }
 
-                // Fetch partnerships (accepted connections)
-                const partnershipsResponse = await getNGOPartnerships({ status: 'active' });
-                console.log('Partnerships Response:', partnershipsResponse);
-                if (partnershipsResponse.success && partnershipsResponse.data) {
-                    const parts = partnershipsResponse.data.partnerships || partnershipsResponse.data;
-                    console.log('Partnerships found:', parts.length);
-                    
-                    if (parts.length === 0) {
-                        console.warn('No active partnerships found');
+                // Fetch partnerships (accepted connections) - fetch both active and completed for full history
+                const [activeResponse, completedResponse] = await Promise.all([
+                    getNGOPartnerships({ status: 'active', limit: 100 }),
+                    getNGOPartnerships({ status: 'completed', limit: 100 })
+                ]);
+                
+                // Combine active and completed partnerships for analytics
+                const activeParts = activeResponse.success && activeResponse.data 
+                    ? (activeResponse.data.partnerships || activeResponse.data) 
+                    : [];
+                const completedParts = completedResponse.success && completedResponse.data 
+                    ? (completedResponse.data.partnerships || completedResponse.data) 
+                    : [];
+                const allParts = [...activeParts, ...completedParts];
+                
+                console.log('Partnerships Response - Active:', activeParts.length, 'Completed:', completedParts.length, 'Total:', allParts.length);
+                
+                    if (allParts.length === 0) {
+                        console.warn('No partnerships found');
                         setPartnerships([]);
                         setFundData([]);
                         setConnectionHistory([]);
                     } else {
                         // Fetch fund utilization for each partnership to get total utilized
                         const partnershipsWithUtilization = await Promise.all(
-                            parts.map(async (p) => {
+                            allParts.map(async (p) => {
                                 try {
                                     const utilResponse = await getPartnershipFundUtilization(p.id);
                                     if (utilResponse.success && utilResponse.data) {
@@ -466,12 +524,6 @@ export default function NGODashboard() {
                         console.log('Connection History:', historyEntries);
                         setConnectionHistory(historyEntries);
                     }
-                } else {
-                    console.warn('Partnerships response not successful:', partnershipsResponse);
-                    setPartnerships([]);
-                    setFundData([]);
-                    setConnectionHistory([]);
-                }
 
             } catch (error) {
                 console.error('Error fetching dashboard data:', error);
@@ -1058,237 +1110,6 @@ export default function NGODashboard() {
         );
     }
 
-    function AddProjectModal({ open, onClose }) {
-        const [form, setForm] = useState({ name: "", duration: 12, fundsDisplay: "", beneficiaries: 0, location: "", description: "" });
-        const [errors, setErrors] = useState({});
-        
-        if (!open) return null;
-
-        const validateForm = () => {
-            const newErrors = {};
-            
-            if (!form.name.trim()) {
-                newErrors.name = "Project name is required";
-            }
-            
-            if (!form.duration || form.duration < 1) {
-                newErrors.duration = "Duration must be at least 1 month";
-            }
-            
-            if (!form.fundsDisplay.trim()) {
-                newErrors.fundsDisplay = "Project funds are required";
-            } else {
-                const fundsValue = parseInt(form.fundsDisplay.replace(/\D/g, ''), 10);
-                if (isNaN(fundsValue) || fundsValue <= 0) {
-                    newErrors.fundsDisplay = "Please enter a valid amount";
-                }
-            }
-            
-            if (!form.location.trim()) {
-                newErrors.location = "Project location is required";
-            }
-            
-            if (!form.description.trim()) {
-                newErrors.description = "Project description is required";
-            }
-            
-            if (form.beneficiaries < 0) {
-                newErrors.beneficiaries = "Beneficiaries cannot be negative";
-            }
-            
-            setErrors(newErrors);
-            return Object.keys(newErrors).length === 0;
-        };
-
-        const handleSubmit = () => {
-            if (validateForm()) {
-                const fundsValue = parseInt(form.fundsDisplay.replace(/\D/g, ''), 10) || 0;
-                addProject({ 
-                    ...form, 
-                    funds: fundsValue, 
-                    fundsDisplay: form.fundsDisplay, 
-                    duration: form.duration || 12,
-                    progress: 0 // Default progress to 0 for new projects
-                });
-                // Reset form
-                setForm({ name: "", duration: 12, fundsDisplay: "", beneficiaries: 0, location: "", description: "" });
-                setErrors({});
-                onClose();
-            } else {
-                showAlert("Please fill in all required fields correctly", "error");
-            }
-        };
-
-        const isFormValid = form.name.trim() && 
-                           form.duration >= 1 && 
-                           form.fundsDisplay.trim() && 
-                           parseInt(form.fundsDisplay.replace(/\D/g, ''), 10) > 0 &&
-                           form.location.trim() && 
-                           form.description.trim() &&
-                           form.beneficiaries >= 0;
-
-        return (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-                <div className="absolute inset-0 bg-black/30" onClick={onClose} />
-                <div className="relative bg-white rounded-xl shadow-lg w-full max-w-2xl p-6 z-10 max-h-[90vh] overflow-y-auto">
-                    <div className="flex items-center justify-between mb-6">
-                        <div>
-                            <h3 className="text-xl font-semibold text-slate-800">Add New Project</h3>
-                            <p className="mt-1 text-sm text-slate-500">Fill in the details to create a new project</p>
-                        </div>
-                        <button 
-                            onClick={onClose}
-                            className="p-2 transition-colors rounded-full hover:bg-slate-100"
-                        >
-                            <X size={20} className="text-slate-500" />
-                        </button>
-                    </div>
-
-                    <div className="space-y-5">
-                        {/* Project Name */}
-                        <div className="col-span-2">
-                            <label className="block mb-2 text-sm font-medium text-slate-700">
-                                Project Name <span className="text-red-500">*</span>
-                            </label>
-                            <input 
-                                type="text"
-                                value={form.name} 
-                                onChange={(e) => {
-                                    setForm(f => ({ ...f, name: e.target.value }));
-                                    if (errors.name) setErrors({ ...errors, name: null });
-                                }}
-                                placeholder="e.g., Digital Learning Labs 2.0"
-                                className={`w-full border ${errors.name ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
-                            />
-                            {errors.name && <p className="mt-1 text-xs text-red-500">{errors.name}</p>}
-                            <p className="mt-1 text-xs text-slate-400">Enter a descriptive name for your project</p>
-                    </div>
-
-                        <div className="grid grid-cols-2 gap-4">
-                            {/* Duration */}
-                            <div>
-                                <label className="block mb-2 text-sm font-medium text-slate-700">
-                                    Project Duration (Months) <span className="text-red-500">*</span>
-                                </label>
-                                <input 
-                                    type="number" 
-                                    min="1"
-                                    value={form.duration} 
-                                    onChange={(e) => {
-                                        const val = Number(e.target.value) || 0;
-                                        setForm(f => ({ ...f, duration: val }));
-                                        if (errors.duration) setErrors({ ...errors, duration: null });
-                                    }}
-                                    placeholder="12"
-                                    className={`w-full border ${errors.duration ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
-                                />
-                                {errors.duration && <p className="mt-1 text-xs text-red-500">{errors.duration}</p>}
-                                <p className="mt-1 text-xs text-slate-400">How long will this project run?</p>
-                            </div>
-
-                            {/* Funds */}
-                            <div>
-                                <label className="block mb-2 text-sm font-medium text-slate-700">
-                                    Project Funds (₹) <span className="text-red-500">*</span>
-                                </label>
-                                <input 
-                                    type="text"
-                                    value={form.fundsDisplay} 
-                                    onChange={(e) => {
-                                        setForm(f => ({ ...f, fundsDisplay: e.target.value }));
-                                        if (errors.fundsDisplay) setErrors({ ...errors, fundsDisplay: null });
-                                    }}
-                                    placeholder="e.g., 32,00,000"
-                                    className={`w-full border ${errors.fundsDisplay ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
-                                />
-                                {errors.fundsDisplay && <p className="mt-1 text-xs text-red-500">{errors.fundsDisplay}</p>}
-                                <p className="mt-1 text-xs text-slate-400">Total budget required for this project</p>
-                            </div>
-                        </div>
-
-                        {/* Beneficiaries */}
-                        <div>
-                            <label className="block mb-2 text-sm font-medium text-slate-700">
-                                Expected Beneficiaries
-                            </label>
-                            <input 
-                                type="number" 
-                                min="0"
-                                value={form.beneficiaries} 
-                                onChange={(e) => {
-                                    const val = Math.max(0, Number(e.target.value || 0));
-                                    setForm(f => ({ ...f, beneficiaries: val }));
-                                    if (errors.beneficiaries) setErrors({ ...errors, beneficiaries: null });
-                                }}
-                                placeholder="0"
-                                className={`w-full border ${errors.beneficiaries ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
-                            />
-                            {errors.beneficiaries && <p className="mt-1 text-xs text-red-500">{errors.beneficiaries}</p>}
-                            <p className="mt-1 text-xs text-slate-400">Number of people who will benefit from this project</p>
-                        </div>
-
-                        {/* Location */}
-                        <div>
-                            <label className="block mb-2 text-sm font-medium text-slate-700">
-                                Project Location <span className="text-red-500">*</span>
-                            </label>
-                            <input 
-                                type="text"
-                                value={form.location} 
-                                onChange={(e) => {
-                                    setForm(f => ({ ...f, location: e.target.value }));
-                                    if (errors.location) setErrors({ ...errors, location: null });
-                                }}
-                                placeholder="e.g., Mumbai, Maharashtra"
-                                className={`w-full border ${errors.location ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
-                            />
-                            {errors.location && <p className="mt-1 text-xs text-red-500">{errors.location}</p>}
-                            <p className="mt-1 text-xs text-slate-400">Where will this project be implemented?</p>
-                        </div>
-
-                        {/* Description */}
-                        <div>
-                            <label className="block mb-2 text-sm font-medium text-slate-700">
-                                Project Description <span className="text-red-500">*</span>
-                            </label>
-                            <textarea 
-                                value={form.description} 
-                                onChange={(e) => {
-                                    setForm(f => ({ ...f, description: e.target.value }));
-                                    if (errors.description) setErrors({ ...errors, description: null });
-                                }}
-                                placeholder="Describe your project goals, objectives, and expected impact..."
-                                rows={4}
-                                className={`w-full border ${errors.description ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none`}
-                            />
-                            {errors.description && <p className="mt-1 text-xs text-red-500">{errors.description}</p>}
-                            <p className="mt-1 text-xs text-slate-400">Provide a detailed description of your project</p>
-                        </div>
-                    </div>
-
-                    <div className="flex justify-end gap-3 pt-4 mt-6 border-t border-slate-200">
-                        <button 
-                            onClick={onClose} 
-                            className="px-5 py-2.5 rounded-lg bg-slate-100 text-slate-700 font-medium hover:bg-slate-200 transition-colors"
-                        >
-                            Cancel
-                        </button>
-                        <button 
-                            onClick={handleSubmit}
-                            disabled={!isFormValid}
-                            className={`px-5 py-2.5 rounded-lg font-medium transition-colors ${
-                                isFormValid 
-                                    ? 'bg-indigo-600 text-white hover:bg-indigo-700' 
-                                    : 'bg-slate-300 text-slate-500 cursor-not-allowed'
-                            }`}
-                        >
-                            Add Project
-                        </button>
-                    </div>
-                </div>
-            </div>
-        );
-    }
 
     function ConfirmDeleteModal({ open, projectId, onCancel, onConfirm }) {
         if (!open) return null;
@@ -2032,7 +1853,7 @@ export default function NGODashboard() {
                             {/* Project modals */}
                             <ViewProjectModal project={viewProject} onClose={() => setViewProject(null)} />
                             <EditProjectModal project={editProject} onClose={() => setEditProject(null)} />
-                            <AddProjectModal open={addProjectOpen} onClose={() => setAddProjectOpen(false)} />
+                            <AddProjectModal open={addProjectOpen} onClose={() => setAddProjectOpen(false)} addProject={addProject} showAlert={showAlert} />
                             <ConfirmDeleteModal
                                 open={confirmDelete.open}
                                 projectId={confirmDelete.projectId}
@@ -2514,6 +2335,259 @@ export default function NGODashboard() {
         </div>
     );
 }
+
+// Add Project Modal Component - Extracted to prevent re-creation
+// Form state is managed internally to prevent parent re-renders on every keystroke
+const AddProjectModal = memo(function AddProjectModal({ open, onClose, addProject, showAlert }) {
+    const [form, setForm] = useState({ name: "", duration: 12, fundsDisplay: "", beneficiaries: 0, location: "", description: "" });
+    const [errors, setErrors] = useState({});
+    
+    // Reset form when modal opens
+    useEffect(() => {
+        if (open) {
+            setForm({ name: "", duration: 12, fundsDisplay: "", beneficiaries: 0, location: "", description: "" });
+            setErrors({});
+        }
+    }, [open]);
+
+    if (!open) return null;
+
+    const validateForm = () => {
+        const newErrors = {};
+        
+        if (!form.name.trim()) {
+            newErrors.name = "Project name is required";
+        }
+        
+        if (!form.duration || form.duration < 1) {
+            newErrors.duration = "Duration must be at least 1 month";
+        }
+        
+        if (!form.fundsDisplay.trim()) {
+            newErrors.fundsDisplay = "Project funds are required";
+        } else {
+            const fundsValue = parseInt(form.fundsDisplay.replace(/\D/g, ''), 10);
+            if (isNaN(fundsValue) || fundsValue <= 0) {
+                newErrors.fundsDisplay = "Please enter a valid amount";
+            }
+        }
+        
+        if (!form.location.trim()) {
+            newErrors.location = "Project location is required";
+        }
+        
+        if (!form.description.trim()) {
+            newErrors.description = "Project description is required";
+        }
+        
+        if (form.beneficiaries < 0) {
+            newErrors.beneficiaries = "Beneficiaries cannot be negative";
+        }
+        
+        setErrors(newErrors);
+        return Object.keys(newErrors).length === 0;
+    };
+
+    const handleSubmit = () => {
+        if (validateForm()) {
+            const fundsValue = parseInt(form.fundsDisplay.replace(/\D/g, ''), 10) || 0;
+            addProject({ 
+                ...form, 
+                funds: fundsValue, 
+                fundsDisplay: form.fundsDisplay, 
+                duration: form.duration || 12,
+                progress: 0 // Default progress to 0 for new projects
+            });
+            // Reset form
+            setForm({ name: "", duration: 12, fundsDisplay: "", beneficiaries: 0, location: "", description: "" });
+            setErrors({});
+            onClose();
+        } else {
+            showAlert("Please fill in all required fields correctly", "error");
+        }
+    };
+
+    const isFormValid = form.name.trim() && 
+                       form.duration >= 1 && 
+                       form.fundsDisplay.trim() && 
+                       parseInt(form.fundsDisplay.replace(/\D/g, ''), 10) > 0 &&
+                       form.location.trim() && 
+                       form.description.trim() &&
+                       form.beneficiaries >= 0;
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div 
+                className="absolute inset-0 bg-black/30" 
+                onClick={(e) => {
+                    // Only close if clicking directly on backdrop, not on form
+                    if (e.target === e.currentTarget) {
+                        onClose();
+                    }
+                }} 
+            />
+            <div 
+                onClick={(e) => e.stopPropagation()}
+                className="relative bg-white rounded-xl shadow-lg w-full max-w-2xl p-6 z-10 max-h-[90vh] overflow-y-auto"
+            >
+                <div className="flex items-center justify-between mb-6">
+                    <div>
+                        <h3 className="text-xl font-semibold text-slate-800">Add New Project</h3>
+                        <p className="mt-1 text-sm text-slate-500">Fill in the details to create a new project</p>
+                    </div>
+                    <button 
+                        onClick={onClose}
+                        className="p-2 transition-colors rounded-full hover:bg-slate-100"
+                    >
+                        <X size={20} className="text-slate-500" />
+                    </button>
+                </div>
+
+                <div className="space-y-5">
+                    {/* Project Name */}
+                    <div className="col-span-2">
+                        <label className="block mb-2 text-sm font-medium text-slate-700">
+                            Project Name <span className="text-red-500">*</span>
+                        </label>
+                        <input 
+                            type="text"
+                            value={form.name} 
+                            onChange={(e) => {
+                                setForm(f => ({ ...f, name: e.target.value }));
+                                if (errors.name) setErrors({ ...errors, name: null });
+                            }}
+                            placeholder="e.g., Digital Learning Labs 2.0"
+                            className={`w-full border ${errors.name ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
+                        />
+                        {errors.name && <p className="mt-1 text-xs text-red-500">{errors.name}</p>}
+                        <p className="mt-1 text-xs text-slate-400">Enter a descriptive name for your project</p>
+                </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                        {/* Duration */}
+                        <div>
+                            <label className="block mb-2 text-sm font-medium text-slate-700">
+                                Project Duration (Months) <span className="text-red-500">*</span>
+                            </label>
+                            <input 
+                                type="number" 
+                                min="1"
+                                value={form.duration} 
+                                onChange={(e) => {
+                                    const val = Number(e.target.value) || 0;
+                                    setForm(f => ({ ...f, duration: val }));
+                                    if (errors.duration) setErrors({ ...errors, duration: null });
+                                }}
+                                placeholder="12"
+                                className={`w-full border ${errors.duration ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
+                            />
+                            {errors.duration && <p className="mt-1 text-xs text-red-500">{errors.duration}</p>}
+                            <p className="mt-1 text-xs text-slate-400">How long will this project run?</p>
+                        </div>
+
+                        {/* Funds */}
+                        <div>
+                            <label className="block mb-2 text-sm font-medium text-slate-700">
+                                Project Funds (₹) <span className="text-red-500">*</span>
+                            </label>
+                            <input 
+                                type="text"
+                                value={form.fundsDisplay} 
+                                onChange={(e) => {
+                                    setForm(f => ({ ...f, fundsDisplay: e.target.value }));
+                                    if (errors.fundsDisplay) setErrors({ ...errors, fundsDisplay: null });
+                                }}
+                                placeholder="e.g., 32,00,000"
+                                className={`w-full border ${errors.fundsDisplay ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
+                            />
+                            {errors.fundsDisplay && <p className="mt-1 text-xs text-red-500">{errors.fundsDisplay}</p>}
+                            <p className="mt-1 text-xs text-slate-400">Total budget required for this project</p>
+                        </div>
+                    </div>
+
+                    {/* Beneficiaries */}
+                    <div>
+                        <label className="block mb-2 text-sm font-medium text-slate-700">
+                            Expected Beneficiaries
+                        </label>
+                        <input 
+                            type="number" 
+                            min="0"
+                            value={form.beneficiaries} 
+                            onChange={(e) => {
+                                const val = Math.max(0, Number(e.target.value || 0));
+                                setForm(f => ({ ...f, beneficiaries: val }));
+                                if (errors.beneficiaries) setErrors({ ...errors, beneficiaries: null });
+                            }}
+                            placeholder="0"
+                            className={`w-full border ${errors.beneficiaries ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
+                        />
+                        {errors.beneficiaries && <p className="mt-1 text-xs text-red-500">{errors.beneficiaries}</p>}
+                        <p className="mt-1 text-xs text-slate-400">Number of people who will benefit from this project</p>
+                    </div>
+
+                    {/* Location */}
+                    <div>
+                        <label className="block mb-2 text-sm font-medium text-slate-700">
+                            Project Location <span className="text-red-500">*</span>
+                        </label>
+                        <input 
+                            type="text"
+                            value={form.location} 
+                            onChange={(e) => {
+                                setForm(f => ({ ...f, location: e.target.value }));
+                                if (errors.location) setErrors({ ...errors, location: null });
+                            }}
+                            placeholder="e.g., Mumbai, Maharashtra"
+                            className={`w-full border ${errors.location ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
+                        />
+                        {errors.location && <p className="mt-1 text-xs text-red-500">{errors.location}</p>}
+                        <p className="mt-1 text-xs text-slate-400">Where will this project be implemented?</p>
+                    </div>
+
+                    {/* Description */}
+                    <div>
+                        <label className="block mb-2 text-sm font-medium text-slate-700">
+                            Project Description <span className="text-red-500">*</span>
+                        </label>
+                        <textarea 
+                            value={form.description} 
+                            onChange={(e) => {
+                                setForm(f => ({ ...f, description: e.target.value }));
+                                if (errors.description) setErrors({ ...errors, description: null });
+                            }}
+                            placeholder="Describe your project goals, objectives, and expected impact..."
+                            rows={4}
+                            className={`w-full border ${errors.description ? 'border-red-300' : 'border-slate-300'} rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none`}
+                        />
+                        {errors.description && <p className="mt-1 text-xs text-red-500">{errors.description}</p>}
+                        <p className="mt-1 text-xs text-slate-400">Provide a detailed description of your project</p>
+                    </div>
+                </div>
+
+                <div className="flex justify-end gap-3 pt-4 mt-6 border-t border-slate-200">
+                    <button 
+                        onClick={onClose} 
+                        className="px-5 py-2.5 rounded-lg bg-slate-100 text-slate-700 font-medium hover:bg-slate-200 transition-colors"
+                    >
+                        Cancel
+                    </button>
+                    <button 
+                        onClick={handleSubmit}
+                        disabled={!isFormValid}
+                        className={`px-5 py-2.5 rounded-lg font-medium transition-colors ${
+                            isFormValid 
+                                ? 'bg-indigo-600 text-white hover:bg-indigo-700' 
+                                : 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                        }`}
+                    >
+                        Add Project
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+});
 
 // Fund Utilization Modal Component - Extracted to prevent re-creation
 // Form state is managed internally to prevent parent re-renders on every keystroke

@@ -35,6 +35,9 @@ const ChatDrawer = ({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState(null);
   const bottomRef = useRef(null);
+  const messagesContainerRef = useRef(null);
+  const isUserAtBottomRef = useRef(true);
+  const shouldAutoScrollRef = useRef(true);
   
   // Meeting state
   const [meetings, setMeetings] = useState([]);
@@ -87,9 +90,49 @@ const ChatDrawer = ({
     };
   }, [open, partnershipId, fetchMessages]);
 
+  // Check if user is at bottom of chat
+  const checkIfAtBottom = useCallback(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return false;
+    
+    const threshold = 100; // pixels from bottom
+    const isAtBottom = 
+      container.scrollHeight - container.scrollTop - container.clientHeight < threshold;
+    
+    isUserAtBottomRef.current = isAtBottom;
+    return isAtBottom;
+  }, []);
+
+  // Handle scroll events to track if user is at bottom
+  const handleScroll = useCallback(() => {
+    checkIfAtBottom();
+  }, [checkIfAtBottom]);
+
+  // Auto-scroll to bottom only if user is already at bottom or should auto-scroll
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (!open) return;
+    
+    // Always scroll to bottom when modal first opens
+    if (shouldAutoScrollRef.current) {
+      setTimeout(() => {
+        bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+        shouldAutoScrollRef.current = false;
+      }, 100);
+    } else {
+      // Only auto-scroll if user is at bottom (new messages arrived)
+      if (isUserAtBottomRef.current) {
+        bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      }
+    }
   }, [messages, open]);
+
+  // Reset auto-scroll flag when modal opens
+  useEffect(() => {
+    if (open) {
+      shouldAutoScrollRef.current = true;
+      isUserAtBottomRef.current = true;
+    }
+  }, [open]);
 
   const handleSend = async () => {
     if (!canSend || !partnershipId) return;
@@ -99,7 +142,13 @@ const ChatDrawer = ({
       const payload = response?.message || response?.data?.message;
       const newMessage = payload ? normalizeChatMessage(payload) : null;
       if (newMessage) {
+        // When user sends a message, always scroll to bottom
+        isUserAtBottomRef.current = true;
         setMessages((prev) => [...prev, newMessage]);
+        // Scroll to bottom after message is added
+        setTimeout(() => {
+          bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+        }, 50);
       } else {
         // fallback to refetch
         fetchMessages();
@@ -260,7 +309,11 @@ const ChatDrawer = ({
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-50/50">
+        <div 
+          ref={messagesContainerRef}
+          onScroll={handleScroll}
+          className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-50/50"
+        >
           {/* Display Meetings */}
           {meetings.length > 0 && (
             <div className="space-y-3 mb-4">
