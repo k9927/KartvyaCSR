@@ -15,6 +15,9 @@ build/
 .env.development.local
 .env.test.local
 .env.production.local
+**/.env
+client/.env
+server/.env
 
 # Logs
 logs
@@ -26,8 +29,10 @@ pnpm-debug.log*
 lerna-debug.log*
 
 # Uploads (user-generated content)
+server/uploads/
 server/uploads/*
 !server/uploads/.gitkeep
+uploads/
 
 # OS files
 .DS_Store
