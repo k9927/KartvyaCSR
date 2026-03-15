@@ -8,6 +8,7 @@ import dotenv from "dotenv";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
+import { put } from "@vercel/blob";
 
 // Load environment variables
 dotenv.config();
@@ -104,20 +105,32 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadPath = 'uploads/';
+// Helper: decide whether to use Vercel Blob (only in production) or local disk (dev)
+const isBlobStorage =
+  process.env.NODE_ENV === "production" && !!process.env.BLOB_READ_WRITE_TOKEN;
+
+// Unified storage helper for both multer files and base64 images
+const saveFileToStorage = async (buffer, filename, mimeType) => {
+  if (isBlobStorage) {
+    // Your Blob store/token expects public access
+    const { url } = await put(`uploads/${filename}`, buffer, {
+      access: "public",
+      contentType: mimeType
+    });
+    return url;
+  } else {
+    const uploadPath = "uploads";
     if (!fs.existsSync(uploadPath)) {
       fs.mkdirSync(uploadPath, { recursive: true });
     }
-    cb(null, uploadPath);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+    const filePath = path.join(uploadPath, filename);
+    fs.writeFileSync(filePath, buffer);
+    return `/uploads/${filename}`;
   }
-});
+};
+
+// Configure multer for file uploads - use memory storage so we can send to Blob
+const storage = multer.memoryStorage();
 
 const upload = multer({
   storage: storage,
@@ -125,17 +138,19 @@ const upload = multer({
     fileSize: 5 * 1024 * 1024 // 5MB limit
   },
   fileFilter: (req, file, cb) => {
-    const allowedTypes = ['image/jpeg', 'image/png', 'application/pdf'];
+    const allowedTypes = ["image/jpeg", "image/png", "application/pdf"];
     if (allowedTypes.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error('Invalid file type. Only PDF, JPG, and PNG files are allowed.'));
+      cb(new Error("Invalid file type. Only PDF, JPG, and PNG files are allowed."));
     }
   }
 });
 
-// Serve uploaded files statically
-app.use('/uploads', express.static('uploads'));
+// In local dev, still serve uploads from disk for backwards compatibility
+if (!isBlobStorage) {
+  app.use("/uploads", express.static("uploads"));
+}
 
 
 
@@ -986,11 +1001,11 @@ app.post("/api/auth/logout", (req, res) => {
 
 // NGO Registration Route
 app.post("/api/ngo/register", upload.fields([
-  { name: 'ngoImage', maxCount: 1 },
-  { name: 'FCRACert', maxCount: 1 },
-  { name: '80gCert', maxCount: 1 },
-  { name: '16ACert', maxCount: 1 },
-  { name: 'TrustDeedCert', maxCount: 1 }
+  { name: "ngoImage", maxCount: 1 },
+  { name: "FCRACert", maxCount: 1 },
+  { name: "80gCert", maxCount: 1 },
+  { name: "16ACert", maxCount: 1 },
+  { name: "TrustDeedCert", maxCount: 1 }
 ]), async (req, res) => {
   const client = await db.connect();
   try {
@@ -1053,7 +1068,11 @@ app.post("/api/ngo/register", upload.fields([
     // Handle uploaded NGO image
     let logoPath = null;
     if (req.files && req.files.ngoImage && req.files.ngoImage[0]) {
-      logoPath = `/uploads/${req.files.ngoImage[0].filename}`;
+      const file = req.files.ngoImage[0];
+      const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+      const extension = path.extname(file.originalname) || ".jpg";
+      const filename = `ngoImage-${uniqueSuffix}${extension}`;
+      logoPath = await saveFileToStorage(file.buffer, filename, file.mimetype);
     }
 
     // Insert profile (make sure you have this table)
@@ -1130,8 +1149,8 @@ app.post("/api/ngo/register", upload.fields([
 
 // Corporate Registration Route
 app.post("/api/corporate/register", upload.fields([
-  { name: 'registrationCert', maxCount: 1 },
-  { name: 'csrPolicy', maxCount: 1 }
+  { name: "registrationCert", maxCount: 1 },
+  { name: "csrPolicy", maxCount: 1 }
 ]), async (req, res) => {
   const client = await db.connect();
   try {
@@ -1259,7 +1278,7 @@ app.post("/api/corporate/register", upload.fields([
       documents: req.files ? Object.keys(req.files).map(key => ({
         type: key,
         filename: req.files[key][0].originalname,
-        status: 'uploaded'
+        status: "uploaded"
       })) : [],
       token,
       refreshToken
@@ -3777,24 +3796,18 @@ app.post("/api/partnerships/:partnershipId/fund-utilization", authenticate, asyn
           if (matches) {
             const mimeType = matches[1];
             const base64Data = matches[2];
-            const buffer = Buffer.from(base64Data, 'base64');
-            
+            const buffer = Buffer.from(base64Data, "base64");
+
             // Generate unique filename
-            const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-            const extension = mimeType === 'jpeg' ? 'jpg' : mimeType;
+            const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+            const extension = mimeType === "jpeg" ? "jpg" : mimeType;
             const filename = `fund-util-${uniqueSuffix}.${extension}`;
-            const filePath = path.join('uploads', filename);
-            
-            // Ensure uploads directory exists
-            if (!fs.existsSync('uploads')) {
-              fs.mkdirSync('uploads', { recursive: true });
-            }
-            
-            // Write file to disk
-            fs.writeFileSync(filePath, buffer);
-            
-            // Store the path (accessible via /uploads/filename)
-            savedPhotoPaths.push(`/uploads/${filename}`);
+
+            // Save to Blob or local disk depending on environment
+            const storedPathOrUrl = await saveFileToStorage(buffer, filename, `image/${extension}`);
+
+            // Store the resulting URL or path
+            savedPhotoPaths.push(storedPathOrUrl);
           } else {
             // If it's already a URL/path, keep it as is
             savedPhotoPaths.push(photo);
@@ -4060,14 +4073,20 @@ app.all('*', (req, res) => {
   sendErrorResponse(res, 404, `Route ${req.method} ${req.originalUrl} not found`, null, 'Route Not Found');
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server is running on http://localhost:${PORT}`);
-  console.log(`📝 Enhanced error logging is enabled`);
-  console.log(`🔧 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log('🗄️  Database target:', {
-    PGHOST: process.env.PGHOST,
-    PGDATABASE: process.env.PGDATABASE,
-    PGUSER: process.env.PGUSER,
-    PGPORT: process.env.PGPORT
+// Only start the HTTP listener when running as a standalone server (e.g. local dev).
+// In serverless environments like Vercel, the Express app will be invoked as a handler instead.
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`🚀 Server is running on http://localhost:${PORT}`);
+    console.log(`📝 Enhanced error logging is enabled`);
+    console.log(`🔧 Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log('🗄️  Database target:', {
+      PGHOST: process.env.PGHOST,
+      PGDATABASE: process.env.PGDATABASE,
+      PGUSER: process.env.PGUSER,
+      PGPORT: process.env.PGPORT
+    });
   });
-});
+}
+
+export default app;

@@ -1,4 +1,5 @@
-// Use environment variable in production, fallback to localhost for local dev
+// Use environment variable in production, fallback to local dev URL.
+// On Vercel, set VITE_API_BASE_URL to "/api" so frontend and backend share the same domain.
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api';
 
 // Get auth token from localStorage
