@@ -4,6 +4,8 @@ import "bootstrap/dist/css/bootstrap.min.css";
 import "@fortawesome/fontawesome-free/css/all.min.css";
 import Navbar from '../Navbar';
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api";
+
 // Add custom styles to match the website theme
 const styles = `
   .login-header {
@@ -238,7 +240,7 @@ export default function Login() {
       setShowModal(true);
       setModalStatus('processing');
       setModalMessage('Authenticating your credentials...');
-      const response = await fetch('http://localhost:5000/api/auth/login', {
+      const response = await fetch(`${API_BASE_URL}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })

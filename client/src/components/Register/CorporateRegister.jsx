@@ -4,6 +4,8 @@ import "bootstrap/dist/css/bootstrap.min.css";
 import "@fortawesome/fontawesome-free/css/all.min.css";
 import Navbar from '../Navbar';
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api";
+
 // Add custom styles for password strength and validation
 const styles = `
   .password-strength-container {
@@ -1022,7 +1024,7 @@ export default function CorporateRegister() {
         console.log('Submitting registration...');
 
         // Send the form data to your server
-        const response = await fetch('http://localhost:5000/api/corporate/register', {
+        const response = await fetch(`${API_BASE_URL}/corporate/register`, {
           method: 'POST',
           body: formDataToSend,
         });
